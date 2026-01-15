@@ -18,6 +18,16 @@ function formatDateTime(iso) {
   }).format(d);
 }
 
+// ✅ Siempre devolvemos euros (con decimales) aunque venga en cents
+function getAmountEur(t) {
+  if (t?.amount_eur !== undefined && t?.amount_eur !== null) {
+    const n = Number(t.amount_eur);
+    return Number.isFinite(n) ? n : 0;
+  }
+  const cents = Number(t?.amount ?? 0);
+  return Number.isFinite(cents) ? cents / 100 : 0;
+}
+
 const ATTR_OPTIONS = [
   { value: "ALL", label: "Todos" },
   { value: "MINE", label: "Mío" },
@@ -94,13 +104,9 @@ export default function Movements() {
 
     return tx
       .filter((t) => {
-        // attribution
         if (attrFilter !== "ALL" && t.attribution !== attrFilter) return false;
-
-        // category
         if (categoryFilter !== "ALL" && t.category_id !== categoryFilter) return false;
 
-        // search
         if (!q) return true;
 
         const haystack = [
@@ -120,10 +126,11 @@ export default function Movements() {
       .sort((a, b) => new Date(b.date_time) - new Date(a.date_time));
   }, [tx, attrFilter, categoryFilter, search]);
 
+  // ✅ suma en euros
   const totalOutFiltered = useMemo(() => {
     return filteredTx
       .filter((t) => t.direction === "OUT" && t.type === "EXPENSE")
-      .reduce((acc, t) => acc + t.amount, 0);
+      .reduce((acc, t) => acc + getAmountEur(t), 0);
   }, [filteredTx]);
 
   const countFiltered = filteredTx.length;
@@ -234,41 +241,44 @@ export default function Movements() {
                 </div>
               ) : (
                 <ul className="divide-y divide-white/10">
-                  {filteredTx.map((t) => (
-                    <li key={t.id} className="p-4 flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-sm text-white/60">
-                          {formatDateTime(t.date_time)} · {t.category_name || t.type}
-                        </p>
+                  {filteredTx.map((t) => {
+                    const amountEur = getAmountEur(t);
+                    return (
+                      <li key={t.id} className="p-4 flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm text-white/60">
+                            {formatDateTime(t.date_time)} · {t.category_name || t.type}
+                          </p>
 
-                        <p className="mt-1 font-medium truncate">
-                          {t.concept || "—"}
-                        </p>
+                          <p className="mt-1 font-medium truncate">
+                            {t.concept || "—"}
+                          </p>
 
-                        <p className="text-xs text-white/50 mt-1">
-                          {t.attribution} · {t.payment_method}
-                        </p>
+                          <p className="text-xs text-white/50 mt-1">
+                            {t.attribution} · {t.payment_method}
+                          </p>
 
-                        <div className="mt-2 flex gap-2">
-                          <a
-                            href={`/edit/${t.id}`}
-                            className="px-3 py-1.5 rounded-xl bg-white/10 border border-white/10 text-xs font-semibold"
-                          >
-                            Editar
-                          </a>
+                          <div className="mt-2 flex gap-2">
+                            <a
+                              href={`/edit/${t.id}`}
+                              className="px-3 py-1.5 rounded-xl bg-white/10 border border-white/10 text-xs font-semibold"
+                            >
+                              Editar
+                            </a>
+                          </div>
                         </div>
-                      </div>
 
-                      <div
-                        className={`text-right font-semibold ${
-                          t.direction === "OUT" ? "text-white" : "text-green-300"
-                        }`}
-                      >
-                        {t.direction === "OUT" ? "-" : "+"}
-                        {formatEuro(t.amount)}
-                      </div>
-                    </li>
-                  ))}
+                        <div
+                          className={`text-right font-semibold ${
+                            t.direction === "OUT" ? "text-white" : "text-green-300"
+                          }`}
+                        >
+                          {t.direction === "OUT" ? "-" : "+"}
+                          {formatEuro(amountEur)}
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </div>

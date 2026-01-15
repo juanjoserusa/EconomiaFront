@@ -9,6 +9,16 @@ function Card({ children }) {
   return <div className="rounded-2xl border border-white/10 bg-white/5 p-4">{children}</div>;
 }
 
+function getAmountEur(t) {
+  if (t?.amount_eur !== undefined && t?.amount_eur !== null) {
+    const n = Number(t.amount_eur);
+    return Number.isFinite(n) ? n : 0;
+  }
+  const cents = Number(t?.amount ?? 0);
+  return Number.isFinite(cents) ? cents / 100 : 0;
+}
+
+
 function euro(n) {
   return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(n);
 }
@@ -137,12 +147,12 @@ export default function Home() {
   // ===================== INSIGHTS (solo EXPENSE OUT) =====================
   const insights = useMemo(() => {
     const expenses = tx.filter((t) => t.direction === "OUT" && t.type === "EXPENSE");
-    const total = expenses.reduce((a, t) => a + t.amount, 0);
+    const total = expenses.reduce((a, t) => a + getAmountEur(t), 0);
 
     const catMap = new Map();
     for (const t of expenses) {
       const key = t.category_name || "Sin categoría";
-      catMap.set(key, (catMap.get(key) || 0) + t.amount);
+      catMap.set(key, (catMap.get(key) || 0) + getAmountEur(t));
     }
     const topCategories = Array.from(catMap.entries())
       .map(([name, sum]) => ({ name, sum }))
@@ -152,7 +162,7 @@ export default function Home() {
     const conceptMap = new Map();
     for (const t of expenses) {
       const key = t.concept?.trim() ? t.concept.trim() : (t.category_name || "—");
-      conceptMap.set(key, (conceptMap.get(key) || 0) + t.amount);
+      conceptMap.set(key, (conceptMap.get(key) || 0) + getAmountEur(t));
     }
     const topConcepts = Array.from(conceptMap.entries())
       .map(([label, sum]) => ({ label, sum }))
