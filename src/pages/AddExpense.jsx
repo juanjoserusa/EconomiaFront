@@ -14,6 +14,36 @@ function nowLocalDateTimeValue() {
   )}:${pad(d.getMinutes())}`;
 }
 
+// Deja escribir con coma o punto, y limpia caracteres no permitidos
+function sanitizeMoneyTyping(value) {
+  // Permite: dígitos, coma, punto
+  let v = String(value).replace(/[^\d.,]/g, "");
+
+  // Unifica separadores múltiples: si hay más de uno, dejamos solo el primero como decimal
+  const parts = v.split(/[.,]/);
+  if (parts.length > 2) {
+    v = parts[0] + "," + parts.slice(1).join(""); // dejamos coma como separador visual
+  }
+
+  return v;
+}
+
+// Valida de forma segura sin depender de Number("3,50") (que rompe)
+function isValidMoneyInput(raw) {
+  if (raw == null) return false;
+  const s = String(raw).trim();
+  if (!s) return false;
+
+  // Normaliza coma -> punto
+  const normalized = s.replace(",", ".");
+
+  // Solo números con un separador decimal opcional
+  if (!/^\d+(\.\d{0,2})?$/.test(normalized)) return false;
+
+  const n = Number(normalized);
+  return Number.isFinite(n) && n > 0;
+}
+
 export default function AddExpense() {
   const [month, setMonth] = useState(null);
   const [categories, setCategories] = useState([]);
@@ -35,7 +65,7 @@ export default function AddExpense() {
         setCategories(cats);
         setCategoryId(cats?.[0]?.id || "");
       } catch (e) {
-        setStatus((s) => ({ ...s, error: e.message }));
+        setStatus((s) => ({ ...s, error: e.message || "Error cargando datos" }));
       } finally {
         setStatus((s) => ({ ...s, loading: false }));
       }
@@ -44,18 +74,33 @@ export default function AddExpense() {
   }, []);
 
   const canSubmit = useMemo(() => {
-    return !!month?.id && amount && categoryId && attribution && paymentMethod;
-  }, [month, amount, categoryId, attribution, paymentMethod]);
+    return (
+      !!month?.id &&
+      !!categoryId &&
+      !!attribution &&
+      !!paymentMethod &&
+      !!dateTimeLocal &&
+      isValidMoneyInput(amount)
+    );
+  }, [month, amount, categoryId, attribution, paymentMethod, dateTimeLocal]);
 
   async function onSubmit() {
     setStatus({ loading: false, error: "", ok: "" });
+
+    // Validación extra (por si alguien fuerza el botón)
+    if (!isValidMoneyInput(amount)) {
+      setStatus({ loading: false, error: "Cantidad inválida (usa 3,50 o 3.50)", ok: "" });
+      return;
+    }
+
     try {
-      // Convert datetime-local to ISO (keeps local time by browser, sent as ISO)
+      // Convert datetime-local to ISO
       const iso = new Date(dateTimeLocal).toISOString();
 
       await createTransaction({
         month_id: month.id,
-        amount: Number(amount),
+        // 🔥 Mandamos STRING para que el backend acepte coma/punto y convierta a céntimos
+        amount: amount.trim(),
         type: "EXPENSE",
         direction: "OUT",
         category_id: categoryId,
@@ -70,7 +115,7 @@ export default function AddExpense() {
       setDateTimeLocal(nowLocalDateTimeValue());
       setStatus({ loading: false, error: "", ok: "Gasto guardado ✅" });
     } catch (e) {
-      setStatus({ loading: false, error: e.message, ok: "" });
+      setStatus({ loading: false, error: e.message || "Error guardando gasto", ok: "" });
     }
   }
 
@@ -106,9 +151,14 @@ export default function AddExpense() {
                   inputMode="decimal"
                   className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-3 text-lg"
                   value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  placeholder="Ej: 3.50"
+                  onChange={(e) => setAmount(sanitizeMoneyTyping(e.target.value))}
+                  placeholder="Ej: 3,50"
                 />
+                {!isValidMoneyInput(amount) && amount.trim() ? (
+                  <p className="mt-1 text-xs text-red-200/80">
+                    Formato inválido. Usa por ejemplo 3,50 o 3.50 (máx 2 decimales).
+                  </p>
+                ) : null}
               </label>
 
               <label className="block">

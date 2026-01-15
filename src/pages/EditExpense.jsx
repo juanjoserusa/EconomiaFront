@@ -15,6 +15,41 @@ function toLocalDateTimeValue(iso) {
   )}:${pad(d.getMinutes())}`;
 }
 
+// Deja escribir con coma o punto, y limpia caracteres no permitidos
+function sanitizeMoneyTyping(value) {
+  let v = String(value).replace(/[^\d.,]/g, "");
+
+  // Si hay más de un separador decimal, dejamos solo el primero
+  const parts = v.split(/[.,]/);
+  if (parts.length > 2) {
+    v = parts[0] + "," + parts.slice(1).join("");
+  }
+
+  return v;
+}
+
+// Valida de forma segura (máx 2 decimales)
+function isValidMoneyInput(raw) {
+  if (raw == null) return false;
+  const s = String(raw).trim();
+  if (!s) return false;
+
+  const normalized = s.replace(",", ".");
+  if (!/^\d+(\.\d{0,2})?$/.test(normalized)) return false;
+
+  const n = Number(normalized);
+  return Number.isFinite(n) && n > 0;
+}
+
+// Formatea un número (o string) a "0.00" usando coma si quieres (aquí lo dejo con coma visual)
+function formatToTwoDecimals(value) {
+  if (value === null || value === undefined || value === "") return "";
+  const n = typeof value === "number" ? value : Number(String(value).replace(",", "."));
+  if (!Number.isFinite(n)) return "";
+  // usamos punto en value interno y coma visual en el input si quieres
+  return n.toFixed(2).replace(".", ",");
+}
+
 export default function EditExpense() {
   const { id } = useParams();
   const nav = useNavigate();
@@ -43,7 +78,23 @@ export default function EditExpense() {
         setMonth(m);
         setCategories(cats);
 
-        setAmount(String(tx.amount ?? ""));
+        // ✅ Si el backend ya devuelve amount_eur, lo usamos (recomendado)
+        // Si no existe, fallback:
+        // - si tx.amount parece céntimos (int grande), lo pasamos a euros
+        // - si no, lo dejamos tal cual
+        let initialAmount = "";
+        if (tx?.amount_eur !== undefined && tx?.amount_eur !== null) {
+          initialAmount = formatToTwoDecimals(tx.amount_eur);
+        } else if (typeof tx?.amount === "number") {
+          // heurística: si viene como entero, y tú ya migraste a céntimos, convertimos
+          // (si aún no migraste, lo verás con 2 decimales igualmente)
+          const eur = tx.amount >= 100 ? tx.amount / 100 : tx.amount;
+          initialAmount = formatToTwoDecimals(eur);
+        } else {
+          initialAmount = String(tx?.amount ?? "");
+        }
+
+        setAmount(initialAmount);
         setCategoryId(tx.category_id || (cats?.[0]?.id ?? ""));
         setAttribution(tx.attribution || "MINE");
         setPaymentMethod(tx.payment_method || "CARD");
@@ -59,16 +110,29 @@ export default function EditExpense() {
   }, [id]);
 
   const canSubmit = useMemo(() => {
-    return amount && categoryId && attribution && paymentMethod && dateTimeLocal;
+    return (
+      isValidMoneyInput(amount) &&
+      !!categoryId &&
+      !!attribution &&
+      !!paymentMethod &&
+      !!dateTimeLocal
+    );
   }, [amount, categoryId, attribution, paymentMethod, dateTimeLocal]);
 
   async function onSave() {
     setStatus({ loading: false, error: "", ok: "" });
+
+    if (!isValidMoneyInput(amount)) {
+      setStatus({ loading: false, error: "Cantidad inválida (usa 3,50 o 3.50)", ok: "" });
+      return;
+    }
+
     try {
       const iso = new Date(dateTimeLocal).toISOString();
 
       await updateTransaction(id, {
-        amount: Number(amount),
+        // ✅ mandamos STRING (coma/punto) y que backend convierta a céntimos
+        amount: amount.trim(),
         category_id: categoryId,
         attribution,
         payment_method: paymentMethod,
@@ -78,7 +142,6 @@ export default function EditExpense() {
 
       setStatus({ loading: false, error: "", ok: "Cambios guardados ✅" });
 
-      // Vuelve a movimientos para que lo veas actualizado (simple)
       setTimeout(() => nav("/movements"), 450);
     } catch (e) {
       setStatus({ loading: false, error: e.message, ok: "" });
@@ -133,8 +196,14 @@ export default function EditExpense() {
                   inputMode="decimal"
                   className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-3 text-lg"
                   value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+                  onChange={(e) => setAmount(sanitizeMoneyTyping(e.target.value))}
+                  placeholder="Ej: 3,50"
                 />
+                {!isValidMoneyInput(amount) && amount.trim() ? (
+                  <p className="mt-1 text-xs text-red-200/80">
+                    Formato inválido. Usa 3,50 o 3.50 (máx 2 decimales).
+                  </p>
+                ) : null}
               </label>
 
               <label className="block">
@@ -196,6 +265,7 @@ export default function EditExpense() {
                   className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-3"
                   value={concept}
                   onChange={(e) => setConcept(e.target.value)}
+                  placeholder="Ej: Leche, pañales, regalo..."
                 />
               </label>
 
