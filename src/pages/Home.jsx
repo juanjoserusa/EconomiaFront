@@ -6,21 +6,19 @@ import { getTransactions } from "../api/transactions";
 import { api } from "../api/client";
 
 function Card({ children }) {
-  return <div className="rounded-2xl border border-white/10 bg-white/5 p-4">{children}</div>;
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+      {children}
+    </div>
+  );
 }
-
-function getAmountEur(t) {
-  if (t?.amount_eur !== undefined && t?.amount_eur !== null) {
-    const n = Number(t.amount_eur);
-    return Number.isFinite(n) ? n : 0;
-  }
-  const cents = Number(t?.amount ?? 0);
-  return Number.isFinite(cents) ? cents / 100 : 0;
-}
-
 
 function euro(n) {
-  return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(n);
+  const num = Number(n);
+  return new Intl.NumberFormat("es-ES", {
+    style: "currency",
+    currency: "EUR",
+  }).format(Number.isFinite(num) ? num : 0);
 }
 
 function clamp(n, min, max) {
@@ -41,18 +39,21 @@ function formatMonthLabel(periodKey) {
   if (!periodKey) return "—";
   const [y, m] = String(periodKey).split("-");
   const monthIndex = Number(m) - 1;
-  if (!Number.isFinite(monthIndex) || monthIndex < 0 || monthIndex > 11) return periodKey;
+  if (!Number.isFinite(monthIndex) || monthIndex < 0 || monthIndex > 11)
+    return periodKey;
 
   const d = new Date(Number(y), monthIndex, 1);
-  const label = new Intl.DateTimeFormat("es-ES", { month: "long", year: "numeric" }).format(d);
-  // Capitaliza primera letra (enero -> Enero)
+  const label = new Intl.DateTimeFormat("es-ES", {
+    month: "long",
+    year: "numeric",
+  }).format(d);
+
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
 function formatDateTimeFromDateString(dateStr, endOfDay = false) {
   if (!dateStr) return "—";
   const d = new Date(dateStr);
-  // Asegura hora/min para que sea legible (sin timezone raro)
   d.setHours(endOfDay ? 23 : 0, endOfDay ? 59 : 0, 0, 0);
 
   return new Intl.DateTimeFormat("es-ES", {
@@ -67,13 +68,21 @@ function formatDateTimeFromDateString(dateStr, endOfDay = false) {
 async function getSummaryCurrent() {
   return api("/summary/current");
 }
-
 async function getSafetyBalance() {
   return api("/safety/balance");
 }
-
 async function getPiggybanksSummary() {
   return api("/piggybanks/summary");
+}
+
+// ===== helper: amount en euros desde tx (preferimos amount_eur) =====
+function getAmountEur(t) {
+  if (t?.amount_eur !== undefined && t?.amount_eur !== null) {
+    const n = Number(t.amount_eur);
+    return Number.isFinite(n) ? n : 0;
+  }
+  const cents = Number(t?.amount ?? 0);
+  return Number.isFinite(cents) ? cents / 100 : 0;
 }
 
 export default function Home() {
@@ -84,7 +93,8 @@ export default function Home() {
   const [summary, setSummary] = useState(null);
   const [tx, setTx] = useState([]);
 
-  const [safety, setSafety] = useState({ balance: 0 });
+  // backend nuevo: safety.balance = cents, safety.balance_eur = euros
+  const [safety, setSafety] = useState({ balance: 0, balance_eur: 0 });
   const [piggySummary, setPiggySummary] = useState([]);
 
   // form start month
@@ -111,15 +121,15 @@ export default function Home() {
         ]);
 
         setTx(rows || []);
-        setSafety(sb || { balance: 0 });
+        setSafety(sb || { balance: 0, balance_eur: 0 });
         setPiggySummary(pbs || []);
       } else {
         setTx([]);
-        setSafety({ balance: 0 });
+        setSafety({ balance: 0, balance_eur: 0 });
         setPiggySummary([]);
       }
     } catch (e) {
-      setError(e.message);
+      setError(e?.message || "Error cargando datos");
     } finally {
       setLoading(false);
     }
@@ -132,17 +142,50 @@ export default function Home() {
   async function handleStartMonth() {
     setError("");
     try {
+      // MUY IMPORTANTE: enviar strings tal cual, para que el backend parsee "1,60"
       const payload = {
-        incomeAmount: Number(incomeAmount),
-        savingGoalAmount: Number(savingGoalAmount),
-        weeklyBudgetAmount: Number(weeklyBudgetAmount),
+        incomeAmount: String(incomeAmount).trim(),
+        savingGoalAmount: String(savingGoalAmount).trim(),
+        weeklyBudgetAmount: String(weeklyBudgetAmount).trim(),
       };
+
       await startMonth(payload);
       await load();
     } catch (e) {
-      setError(e.message);
+      setError(e?.message || "Error iniciando mes");
     }
   }
+
+  // ===================== SUMMARY DATA (BACKEND NUEVO) =====================
+  const totals = summary?.totals || null; // cents + *_eur
+  const week = summary?.week || null;
+
+  // Para pintar: usa siempre *_eur
+  const remainingWeekEur = totals?.remainingWeek_eur ?? 0;
+  const weekSpentEur = totals?.weekSpent_eur ?? 0;
+  const remainingMonthEur = totals?.remainingMonth_eur ?? 0;
+  const totalExpensesEur = totals?.totalExpenses_eur ?? 0;
+  const totalIncomeEur = totals?.totalIncome_eur ?? 0;
+  const dailyPaceEur = totals?.dailyPace_eur ?? 0;
+
+  const byAttrEur = totals?.byAttr_eur || {
+    MINE: 0,
+    PARTNER: 0,
+    HOUSE: 0,
+  };
+
+  // month: usa los campos eur del backend
+  const monthLabel = formatMonthLabel(month?.period_key);
+  const monthIncomeEur = month?.income_amount_eur ?? 0;
+  const monthSavingGoalEur = month?.saving_goal_amount_eur ?? 0;
+  const monthWeeklyBudgetEur = month?.weekly_budget_amount_eur ?? 0;
+
+  const weekRangeLabel = week
+    ? `${formatDateTimeFromDateString(week.start_date, false)} → ${formatDateTimeFromDateString(
+        week.end_date,
+        true
+      )}`
+    : "Semana no disponible";
 
   // ===================== INSIGHTS (solo EXPENSE OUT) =====================
   const insights = useMemo(() => {
@@ -161,7 +204,7 @@ export default function Home() {
 
     const conceptMap = new Map();
     for (const t of expenses) {
-      const key = t.concept?.trim() ? t.concept.trim() : (t.category_name || "—");
+      const key = t.concept?.trim() ? t.concept.trim() : t.category_name || "—";
       conceptMap.set(key, (conceptMap.get(key) || 0) + getAmountEur(t));
     }
     const topConcepts = Array.from(conceptMap.entries())
@@ -172,10 +215,7 @@ export default function Home() {
     return { total, topCategories, topConcepts };
   }, [tx]);
 
-  // ===================== SUMMARY DATA =====================
-  const totals = summary?.totals || null;
-  const week = summary?.week || null;
-
+  // ===================== PIGGYBANKS (BACKEND NUEVO) =====================
   const piggyTwoEuro = useMemo(
     () => piggySummary.find((p) => p.type === "TWO_EURO"),
     [piggySummary]
@@ -185,14 +225,9 @@ export default function Home() {
     [piggySummary]
   );
 
-  const monthLabel = formatMonthLabel(month?.period_key);
-
-  const weekRangeLabel = week
-    ? `${formatDateTimeFromDateString(week.start_date, false)} → ${formatDateTimeFromDateString(
-        week.end_date,
-        true
-      )}`
-    : "Semana no disponible";
+  const safetyEur = safety?.balance_eur ?? 0;
+  const piggyTwoEur = piggyTwoEuro?.balance_eur ?? 0;
+  const piggyNormalEur = piggyNormal?.balance_eur ?? 0;
 
   return (
     <>
@@ -231,7 +266,7 @@ export default function Home() {
                 <label className="block">
                   <span className="text-xs text-white/60">Ingreso del mes (€)</span>
                   <input
-                    inputMode="numeric"
+                    inputMode="decimal"
                     className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-3"
                     value={incomeAmount}
                     onChange={(e) => setIncomeAmount(e.target.value)}
@@ -242,7 +277,7 @@ export default function Home() {
                 <label className="block">
                   <span className="text-xs text-white/60">Ahorro objetivo (€)</span>
                   <input
-                    inputMode="numeric"
+                    inputMode="decimal"
                     className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-3"
                     value={savingGoalAmount}
                     onChange={(e) => setSavingGoalAmount(e.target.value)}
@@ -253,7 +288,7 @@ export default function Home() {
                 <label className="block">
                   <span className="text-xs text-white/60">Presupuesto semanal (€)</span>
                   <input
-                    inputMode="numeric"
+                    inputMode="decimal"
                     className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-3"
                     value={weeklyBudgetAmount}
                     onChange={(e) => setWeeklyBudgetAmount(e.target.value)}
@@ -277,8 +312,8 @@ export default function Home() {
               <p className="text-white/60 text-sm">Mes activo</p>
               <p className="mt-1 text-2xl font-semibold">{monthLabel}</p>
               <p className="text-xs text-white/60 mt-2">
-                Ingreso base: {euro(month.income_amount)} · Ahorro objetivo:{" "}
-                {euro(month.saving_goal_amount)} · Semana: {euro(month.weekly_budget_amount)}
+                Ingreso base: {euro(monthIncomeEur)} · Ahorro objetivo: {euro(monthSavingGoalEur)} · Semana:{" "}
+                {euro(monthWeeklyBudgetEur)}
               </p>
             </Card>
 
@@ -286,20 +321,20 @@ export default function Home() {
             <div className="grid grid-cols-2 gap-3">
               <Card>
                 <p className="text-xs text-white/60">Queda esta semana</p>
-                <p className={`mt-2 text-2xl font-semibold ${totals?.remainingWeek < 0 ? "text-red-200" : ""}`}>
-                  {euro(totals?.remainingWeek ?? 0)}
+                <p className={`mt-2 text-2xl font-semibold ${remainingWeekEur < 0 ? "text-red-200" : ""}`}>
+                  {euro(remainingWeekEur)}
                 </p>
-                <p className="text-xs text-white/50 mt-1">Gastado: {euro(totals?.weekSpent ?? 0)}</p>
+                <p className="text-xs text-white/50 mt-1">Gastado: {euro(weekSpentEur)}</p>
                 <p className="text-[11px] text-white/40 mt-2">{weekRangeLabel}</p>
               </Card>
 
               <Card>
                 <p className="text-xs text-white/60">Queda este mes</p>
-                <p className={`mt-2 text-2xl font-semibold ${totals?.remainingMonth < 0 ? "text-red-200" : ""}`}>
-                  {euro(totals?.remainingMonth ?? 0)}
+                <p className={`mt-2 text-2xl font-semibold ${remainingMonthEur < 0 ? "text-red-200" : ""}`}>
+                  {euro(remainingMonthEur)}
                 </p>
-                <p className="text-xs text-white/50 mt-1">Gastos: {euro(totals?.totalExpenses ?? 0)}</p>
-                <p className="text-xs text-white/50">Ingresos: {euro(totals?.totalIncome ?? 0)}</p>
+                <p className="text-xs text-white/50 mt-1">Gastos: {euro(totalExpensesEur)}</p>
+                <p className="text-xs text-white/50">Ingresos: {euro(totalIncomeEur)}</p>
               </Card>
             </div>
 
@@ -307,7 +342,7 @@ export default function Home() {
             <Card>
               <p className="text-xs text-white/60">Ritmo diario recomendado</p>
               <div className="mt-2 flex items-end justify-between gap-2">
-                <p className="text-2xl font-semibold">{euro(totals?.dailyPace ?? 0)}/día</p>
+                <p className="text-2xl font-semibold">{euro(dailyPaceEur)}/día</p>
                 <p className="text-xs text-white/50">{totals?.daysLeft ?? 0} días restantes</p>
               </div>
               <p className="mt-2 text-xs text-white/50">
@@ -321,23 +356,29 @@ export default function Home() {
               <div className="mt-3 grid grid-cols-3 gap-2 text-center">
                 <div className="rounded-xl bg-black/40 border border-white/10 p-3">
                   <p className="text-xs text-white/60">Mío</p>
-                  <p className="mt-1 font-semibold">{euro(totals?.byAttr?.MINE ?? 0)}</p>
+                  <p className="mt-1 font-semibold">{euro(byAttrEur.MINE ?? 0)}</p>
                 </div>
                 <div className="rounded-xl bg-black/40 border border-white/10 p-3">
                   <p className="text-xs text-white/60">Mi mujer</p>
-                  <p className="mt-1 font-semibold">{euro(totals?.byAttr?.PARTNER ?? 0)}</p>
+                  <p className="mt-1 font-semibold">{euro(byAttrEur.PARTNER ?? 0)}</p>
                 </div>
                 <div className="rounded-xl bg-black/40 border border-white/10 p-3">
                   <p className="text-xs text-white/60">Casa</p>
-                  <p className="mt-1 font-semibold">{euro(totals?.byAttr?.HOUSE ?? 0)}</p>
+                  <p className="mt-1 font-semibold">{euro(byAttrEur.HOUSE ?? 0)}</p>
                 </div>
               </div>
 
               <div className="mt-3 grid grid-cols-2 gap-3">
-                <a href="/add" className="rounded-2xl bg-white text-black text-center py-3 font-semibold">
+                <a
+                  href="/add"
+                  className="rounded-2xl bg-white text-black text-center py-3 font-semibold"
+                >
                   Añadir gasto
                 </a>
-                <a href="/movements" className="rounded-2xl bg-white/10 border border-white/10 text-center py-3 font-semibold">
+                <a
+                  href="/movements"
+                  className="rounded-2xl bg-white/10 border border-white/10 text-center py-3 font-semibold"
+                >
                   Movimientos
                 </a>
               </div>
@@ -400,7 +441,7 @@ export default function Home() {
               <div className="mt-3 grid grid-cols-1 gap-3">
                 <div className="rounded-xl bg-black/40 border border-white/10 p-3">
                   <p className="text-xs text-white/60">Fondo de seguridad (banco)</p>
-                  <p className="mt-1 text-xl font-semibold">{euro(safety.balance ?? 0)}</p>
+                  <p className="mt-1 text-xl font-semibold">{euro(safetyEur)}</p>
                   <p className="text-xs text-white/50 mt-1">
                     Solo para imprevistos (y registrarlo en la app).
                   </p>
@@ -409,7 +450,7 @@ export default function Home() {
                 <div className="grid grid-cols-2 gap-3">
                   <div className="rounded-xl bg-black/40 border border-white/10 p-3">
                     <p className="text-xs text-white/60">Hucha 2€</p>
-                    <p className="mt-1 text-lg font-semibold">{euro(piggyTwoEuro?.balance ?? 0)}</p>
+                    <p className="mt-1 text-lg font-semibold">{euro(piggyTwoEur)}</p>
                     <p className="text-[11px] text-white/40 mt-1">
                       {piggyTwoEuro?.entries_count ?? 0} entradas
                     </p>
@@ -417,7 +458,7 @@ export default function Home() {
 
                   <div className="rounded-xl bg-black/40 border border-white/10 p-3">
                     <p className="text-xs text-white/60">Hucha normal</p>
-                    <p className="mt-1 text-lg font-semibold">{euro(piggyNormal?.balance ?? 0)}</p>
+                    <p className="mt-1 text-lg font-semibold">{euro(piggyNormalEur)}</p>
                     <p className="text-[11px] text-white/40 mt-1">
                       {piggyNormal?.entries_count ?? 0} entradas
                     </p>
