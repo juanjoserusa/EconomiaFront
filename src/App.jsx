@@ -7,6 +7,7 @@ import Piggybanks from "./pages/Piggybanks";
 import Emergency from "./pages/Emergency";
 import Savings from "./pages/Savings";
 import Months from "./pages/Months";
+import AddIncome from "./pages/AddIncome";
 
 
 
@@ -22,6 +23,7 @@ export default function App() {
         <Route path="/imprevisto" element={<Emergency />} />
         <Route path="/ahorro" element={<Savings />} />
         <Route path="/meses" element={<Months />} />
+        <Route path="/add-income" element={<AddIncome />} />
       </Routes>
     </BrowserRouter>
   );

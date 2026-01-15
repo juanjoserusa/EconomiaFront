@@ -1,135 +1,112 @@
 import { useEffect, useMemo, useState } from "react";
 import Layout from "../components/Layout";
 import BottomNav from "../components/BottomNav";
-import { getCurrentMonth, startMonth } from "../api/month";
-import { getTransactions } from "../api/transactions";
-import { api } from "../api/client";
 
-function Card({ children }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-      {children}
-    </div>
-  );
-}
+import {
+  getMonths,
+  updateMonth,
+  closeMonth,
+  deleteMonth,
+  startMonth,
+} from "../api/month";
 
 function euro(n) {
   const num = Number(n);
-  return new Intl.NumberFormat("es-ES", {
-    style: "currency",
-    currency: "EUR",
-  }).format(Number.isFinite(num) ? num : 0);
-}
-
-function clamp(n, min, max) {
-  return Math.max(min, Math.min(max, n));
-}
-
-function ProgressBar({ value, max }) {
-  const pct = max > 0 ? clamp(Math.round((value / max) * 100), 0, 100) : 0;
-  return (
-    <div className="mt-2 h-2 w-full rounded-full bg-white/10 overflow-hidden">
-      <div className="h-2 rounded-full bg-white" style={{ width: `${pct}%` }} />
-    </div>
+  return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(
+    Number.isFinite(num) ? num : 0
   );
 }
 
-// ---------- FECHAS BONITAS ----------
-function formatMonthLabel(periodKey) {
+function monthLabel(periodKey) {
   if (!periodKey) return "—";
   const [y, m] = String(periodKey).split("-");
-  const monthIndex = Number(m) - 1;
-  if (!Number.isFinite(monthIndex) || monthIndex < 0 || monthIndex > 11)
-    return periodKey;
-
-  const d = new Date(Number(y), monthIndex, 1);
-  const label = new Intl.DateTimeFormat("es-ES", {
-    month: "long",
-    year: "numeric",
-  }).format(d);
-
+  const idx = Number(m) - 1;
+  if (idx < 0 || idx > 11) return periodKey;
+  const d = new Date(Number(y), idx, 1);
+  const label = new Intl.DateTimeFormat("es-ES", { month: "long", year: "numeric" }).format(d);
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
-function formatDateTimeFromDateString(dateStr, endOfDay = false) {
+function formatDate(dateStr) {
   if (!dateStr) return "—";
   const d = new Date(dateStr);
-  d.setHours(endOfDay ? 23 : 0, endOfDay ? 59 : 0, 0, 0);
-
-  return new Intl.DateTimeFormat("es-ES", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(d);
+  return new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" }).format(d);
 }
 
-async function getSummaryCurrent() {
-  return api("/summary/current");
-}
-async function getSafetyBalance() {
-  return api("/safety/balance");
-}
-async function getPiggybanksSummary() {
-  return api("/piggybanks/summary");
+function Card({ children }) {
+  return <div className="rounded-2xl border border-white/10 bg-white/5 p-4">{children}</div>;
 }
 
-// ===== helper: amount en euros desde tx (preferimos amount_eur) =====
-function getAmountEur(t) {
-  if (t?.amount_eur !== undefined && t?.amount_eur !== null) {
-    const n = Number(t.amount_eur);
-    return Number.isFinite(n) ? n : 0;
+// ================== MONEY INPUT HELPERS (EUROS) ==================
+function sanitizeMoneyTyping(value) {
+  let v = String(value).replace(/[^\d.,]/g, "");
+  const parts = v.split(/[.,]/);
+  if (parts.length > 2) {
+    v = parts[0] + "," + parts.slice(1).join("");
   }
-  const cents = Number(t?.amount ?? 0);
-  return Number.isFinite(cents) ? cents / 100 : 0;
+  return v;
 }
 
-export default function Home() {
+// Para EDIT: permitimos 0 (>= 0). Para CREATE se valida aparte.
+function isValidMoneyInputAllowZero(raw) {
+  if (raw == null) return false;
+  const s = String(raw).trim();
+  if (!s) return false;
+
+  const normalized = s.replace(",", ".");
+  if (!/^\d+(\.\d{0,2})?$/.test(normalized)) return false;
+
+  const n = Number(normalized);
+  return Number.isFinite(n) && n >= 0;
+}
+
+// Para CREATE: pedimos > 0
+function isValidMoneyInputStrict(raw) {
+  if (raw == null) return false;
+  const s = String(raw).trim();
+  if (!s) return false;
+
+  const normalized = s.replace(",", ".");
+  if (!/^\d+(\.\d{0,2})?$/.test(normalized)) return false;
+
+  const n = Number(normalized);
+  return Number.isFinite(n) && n > 0;
+}
+
+function clean(v) {
+  const s = String(v ?? "").trim();
+  return s ? s : "";
+}
+
+export default function Months() {
+  const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState("");
   const [error, setError] = useState("");
+  const [ok, setOk] = useState("");
 
-  const [month, setMonth] = useState(null);
-  const [summary, setSummary] = useState(null);
-  const [tx, setTx] = useState([]);
-
-  // backend nuevo: safety.balance = cents, safety.balance_eur = euros
-  const [safety, setSafety] = useState({ balance: 0, balance_eur: 0 });
-  const [piggySummary, setPiggySummary] = useState([]);
-
-  // form start month
+  // Editor (para el mes OPEN) — inputs en EUROS (string)
+  const [editId, setEditId] = useState("");
   const [incomeAmount, setIncomeAmount] = useState("");
   const [savingGoalAmount, setSavingGoalAmount] = useState("");
   const [weeklyBudgetAmount, setWeeklyBudgetAmount] = useState("");
 
+  // Crear mes nuevo (cuando no hay OPEN) — inputs en EUROS (string)
+  const [newIncome, setNewIncome] = useState("");
+  const [newSaving, setNewSaving] = useState("");
+  const [newWeekly, setNewWeekly] = useState("");
+
+  const openMonth = useMemo(() => rows.find((m) => m.status === "OPEN") || null, [rows]);
+
   async function load() {
     setLoading(true);
     setError("");
-
+    setOk("");
     try {
-      const s = await getSummaryCurrent();
-      setSummary(s);
-
-      const m = s?.month ? s.month : await getCurrentMonth();
-      setMonth(m || null);
-
-      if (m?.id) {
-        const [rows, sb, pbs] = await Promise.all([
-          getTransactions(m.id),
-          getSafetyBalance(),
-          getPiggybanksSummary(),
-        ]);
-
-        setTx(rows || []);
-        setSafety(sb || { balance: 0, balance_eur: 0 });
-        setPiggySummary(pbs || []);
-      } else {
-        setTx([]);
-        setSafety({ balance: 0, balance_eur: 0 });
-        setPiggySummary([]);
-      }
+      const m = await getMonths();
+      setRows(m || []);
     } catch (e) {
-      setError(e?.message || "Error cargando datos");
+      setError(e?.message || "Error cargando meses");
     } finally {
       setLoading(false);
     }
@@ -139,100 +116,172 @@ export default function Home() {
     load();
   }, []);
 
-  async function handleStartMonth() {
-    setError("");
-    try {
-      // MUY IMPORTANTE: enviar strings tal cual, para que el backend parsee "1,60"
-      const payload = {
-        incomeAmount: String(incomeAmount).trim(),
-        savingGoalAmount: String(savingGoalAmount).trim(),
-        weeklyBudgetAmount: String(weeklyBudgetAmount).trim(),
-      };
+  // Cuando cambia el openMonth, precarga editor usando *_eur (NO cents)
+  useEffect(() => {
+    if (openMonth?.id) {
+      setEditId(openMonth.id);
 
-      await startMonth(payload);
+      setIncomeAmount(String(openMonth.income_amount_eur ?? ""));
+      setSavingGoalAmount(String(openMonth.saving_goal_amount_eur ?? ""));
+      setWeeklyBudgetAmount(String(openMonth.weekly_budget_amount_eur ?? ""));
+    } else {
+      setEditId("");
+      setIncomeAmount("");
+      setSavingGoalAmount("");
+      setWeeklyBudgetAmount("");
+    }
+  }, [openMonth?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function flashOk(msg) {
+    setOk(msg);
+    setTimeout(() => setOk(""), 1200);
+  }
+
+  async function onUpdateOpenMonth() {
+    if (!editId) return;
+
+    setError("");
+    setOk("");
+
+    const inc = clean(incomeAmount);
+    const sav = clean(savingGoalAmount);
+    const wee = clean(weeklyBudgetAmount);
+
+    // Validación: si hay valor, debe ser válido (>=0)
+    if (inc && !isValidMoneyInputAllowZero(inc)) {
+      setError("Ingreso inválido (usa 568 o 568,50)");
+      return;
+    }
+    if (sav && !isValidMoneyInputAllowZero(sav)) {
+      setError("Ahorro inválido (usa 250 o 250,00)");
+      return;
+    }
+    if (wee && !isValidMoneyInputAllowZero(wee)) {
+      setError("Semana inválida (usa 50 o 50,00)");
+      return;
+    }
+
+    // ✅ Mandamos STRINGS en euros. El backend convierte a céntimos.
+    const payload = {};
+    if (inc) payload.incomeAmount = inc;
+    if (sav) payload.savingGoalAmount = sav;
+    if (wee) payload.weeklyBudgetAmount = wee;
+
+    // Si no cambia nada, no hacemos request
+    if (Object.keys(payload).length === 0) {
+      flashOk("Nada que guardar ✅");
+      return;
+    }
+
+    setBusyId(editId);
+    try {
+      await updateMonth(editId, payload);
+      flashOk("Mes actualizado ✅");
       await load();
     } catch (e) {
-      setError(e?.message || "Error iniciando mes");
+      setError(e?.message || "Error actualizando mes");
+    } finally {
+      setBusyId("");
     }
   }
 
-  // ===================== SUMMARY DATA (BACKEND NUEVO) =====================
-  const totals = summary?.totals || null; // cents + *_eur
-  const week = summary?.week || null;
+  async function onCloseMonth() {
+    if (!openMonth?.id) return;
 
-  // Para pintar: usa siempre *_eur
-  const remainingWeekEur = totals?.remainingWeek_eur ?? 0;
-  const weekSpentEur = totals?.weekSpent_eur ?? 0;
-  const remainingMonthEur = totals?.remainingMonth_eur ?? 0;
-  const totalExpensesEur = totals?.totalExpenses_eur ?? 0;
-  const totalIncomeEur = totals?.totalIncome_eur ?? 0;
-  const dailyPaceEur = totals?.dailyPace_eur ?? 0;
+    const sure = window.confirm(
+      `¿Cerrar ${monthLabel(openMonth.period_key)}?\n\nEsto consolidará ahorro + sobrante al fondo y cerrará el mes.`
+    );
+    if (!sure) return;
 
-  const byAttrEur = totals?.byAttr_eur || {
-    MINE: 0,
-    PARTNER: 0,
-    HOUSE: 0,
-  };
-
-  // month: usa los campos eur del backend
-  const monthLabel = formatMonthLabel(month?.period_key);
-  const monthIncomeEur = month?.income_amount_eur ?? 0;
-  const monthSavingGoalEur = month?.saving_goal_amount_eur ?? 0;
-  const monthWeeklyBudgetEur = month?.weekly_budget_amount_eur ?? 0;
-
-  const weekRangeLabel = week
-    ? `${formatDateTimeFromDateString(week.start_date, false)} → ${formatDateTimeFromDateString(
-        week.end_date,
-        true
-      )}`
-    : "Semana no disponible";
-
-  // ===================== INSIGHTS (solo EXPENSE OUT) =====================
-  const insights = useMemo(() => {
-    const expenses = tx.filter((t) => t.direction === "OUT" && t.type === "EXPENSE");
-    const total = expenses.reduce((a, t) => a + getAmountEur(t), 0);
-
-    const catMap = new Map();
-    for (const t of expenses) {
-      const key = t.category_name || "Sin categoría";
-      catMap.set(key, (catMap.get(key) || 0) + getAmountEur(t));
+    setBusyId(openMonth.id);
+    setError("");
+    setOk("");
+    try {
+      await closeMonth(openMonth.id);
+      flashOk("Mes cerrado ✅");
+      await load();
+    } catch (e) {
+      setError(e?.message || "Error cerrando mes");
+    } finally {
+      setBusyId("");
     }
-    const topCategories = Array.from(catMap.entries())
-      .map(([name, sum]) => ({ name, sum }))
-      .sort((a, b) => b.sum - a.sum)
-      .slice(0, 5);
+  }
 
-    const conceptMap = new Map();
-    for (const t of expenses) {
-      const key = t.concept?.trim() ? t.concept.trim() : t.category_name || "—";
-      conceptMap.set(key, (conceptMap.get(key) || 0) + getAmountEur(t));
+  async function onDeleteMonth(monthId, label) {
+    const sure = window.confirm(
+      `¿Borrar el mes ${label}?\n\nSe borrarán también sus semanas y movimientos.\nLas huchas NO se tocan.`
+    );
+    if (!sure) return;
+
+    setBusyId(monthId);
+    setError("");
+    setOk("");
+    try {
+      await deleteMonth(monthId);
+      flashOk("Mes borrado ✅");
+      await load();
+    } catch (e) {
+      setError(e?.message || "Error borrando mes");
+    } finally {
+      setBusyId("");
     }
-    const topConcepts = Array.from(conceptMap.entries())
-      .map(([label, sum]) => ({ label, sum }))
-      .sort((a, b) => b.sum - a.sum)
-      .slice(0, 5);
+  }
 
-    return { total, topCategories, topConcepts };
-  }, [tx]);
+  async function onStartNewMonth() {
+    setError("");
+    setOk("");
 
-  // ===================== PIGGYBANKS (BACKEND NUEVO) =====================
-  const piggyTwoEuro = useMemo(
-    () => piggySummary.find((p) => p.type === "TWO_EURO"),
-    [piggySummary]
-  );
-  const piggyNormal = useMemo(
-    () => piggySummary.find((p) => p.type === "NORMAL"),
-    [piggySummary]
-  );
+    if (openMonth) {
+      setError("Ya existe un mes OPEN. Ciérralo o bórralo antes de crear otro.");
+      return;
+    }
 
-  const safetyEur = safety?.balance_eur ?? 0;
-  const piggyTwoEur = piggyTwoEuro?.balance_eur ?? 0;
-  const piggyNormalEur = piggyNormal?.balance_eur ?? 0;
+    const inc = clean(newIncome);
+    const sav = clean(newSaving);
+    const wee = clean(newWeekly);
+
+    if (!inc || !sav || !wee) {
+      setError("Rellena ingreso, ahorro objetivo y presupuesto semanal.");
+      return;
+    }
+
+    if (!isValidMoneyInputStrict(inc)) {
+      setError("Ingreso inválido (usa 568 o 568,50)");
+      return;
+    }
+    if (!isValidMoneyInputStrict(sav)) {
+      setError("Ahorro inválido (usa 250 o 250,00)");
+      return;
+    }
+    if (!isValidMoneyInputStrict(wee)) {
+      setError("Semana inválida (usa 50 o 50,00)");
+      return;
+    }
+
+    setBusyId("NEW");
+    try {
+      await startMonth({
+        incomeAmount: inc,
+        savingGoalAmount: sav,
+        weeklyBudgetAmount: wee,
+      });
+
+      flashOk("Mes creado ✅");
+      setNewIncome("");
+      setNewSaving("");
+      setNewWeekly("");
+      await load();
+    } catch (e) {
+      setError(e?.message || "Error creando mes");
+    } finally {
+      setBusyId("");
+    }
+  }
 
   return (
     <>
       <Layout
-        title="Home"
+        title="Meses"
         rightSlot={
           <button
             onClick={load}
@@ -248,239 +297,215 @@ export default function Home() {
           </div>
         ) : null}
 
+        {ok ? (
+          <div className="mb-4 rounded-xl border border-green-500/30 bg-green-500/10 p-3 text-sm text-green-200">
+            {ok}
+          </div>
+        ) : null}
+
         {loading ? (
           <div className="text-white/60">Cargando…</div>
-        ) : !month ? (
-          <div className="space-y-4">
-            <Card>
-              <p className="text-white/60 text-sm">No hay mes abierto</p>
-              <p className="mt-1 text-lg font-semibold">
-                Inicia el mes para empezar a registrar gastos.
-              </p>
-            </Card>
-
-            <Card>
-              <p className="text-sm font-semibold">Iniciar mes</p>
-
-              <div className="mt-3 space-y-3">
-                <label className="block">
-                  <span className="text-xs text-white/60">Ingreso del mes (€)</span>
-                  <input
-                    inputMode="decimal"
-                    className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-3"
-                    value={incomeAmount}
-                    onChange={(e) => setIncomeAmount(e.target.value)}
-                    placeholder="Ej: 2500"
-                  />
-                </label>
-
-                <label className="block">
-                  <span className="text-xs text-white/60">Ahorro objetivo (€)</span>
-                  <input
-                    inputMode="decimal"
-                    className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-3"
-                    value={savingGoalAmount}
-                    onChange={(e) => setSavingGoalAmount(e.target.value)}
-                    placeholder="Ej: 400"
-                  />
-                </label>
-
-                <label className="block">
-                  <span className="text-xs text-white/60">Presupuesto semanal (€)</span>
-                  <input
-                    inputMode="decimal"
-                    className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-3"
-                    value={weeklyBudgetAmount}
-                    onChange={(e) => setWeeklyBudgetAmount(e.target.value)}
-                    placeholder="Ej: 150"
-                  />
-                </label>
-
-                <button
-                  onClick={handleStartMonth}
-                  className="w-full rounded-2xl bg-white text-black py-3 font-semibold"
-                >
-                  Empezar mes
-                </button>
-              </div>
-            </Card>
-          </div>
         ) : (
           <div className="space-y-4">
-            {/* ====== CABECERA MES ====== */}
             <Card>
-              <p className="text-white/60 text-sm">Mes activo</p>
-              <p className="mt-1 text-2xl font-semibold">{monthLabel}</p>
-              <p className="text-xs text-white/60 mt-2">
-                Ingreso base: {euro(monthIncomeEur)} · Ahorro objetivo: {euro(monthSavingGoalEur)} · Semana:{" "}
-                {euro(monthWeeklyBudgetEur)}
-              </p>
-            </Card>
-
-            {/* ====== KPI Semana/Mes ====== */}
-            <div className="grid grid-cols-2 gap-3">
-              <Card>
-                <p className="text-xs text-white/60">Queda esta semana</p>
-                <p className={`mt-2 text-2xl font-semibold ${remainingWeekEur < 0 ? "text-red-200" : ""}`}>
-                  {euro(remainingWeekEur)}
-                </p>
-                <p className="text-xs text-white/50 mt-1">Gastado: {euro(weekSpentEur)}</p>
-                <p className="text-[11px] text-white/40 mt-2">{weekRangeLabel}</p>
-              </Card>
-
-              <Card>
-                <p className="text-xs text-white/60">Queda este mes</p>
-                <p className={`mt-2 text-2xl font-semibold ${remainingMonthEur < 0 ? "text-red-200" : ""}`}>
-                  {euro(remainingMonthEur)}
-                </p>
-                <p className="text-xs text-white/50 mt-1">Gastos: {euro(totalExpensesEur)}</p>
-                <p className="text-xs text-white/50">Ingresos: {euro(totalIncomeEur)}</p>
-              </Card>
-            </div>
-
-            {/* ====== RITMO ====== */}
-            <Card>
-              <p className="text-xs text-white/60">Ritmo diario recomendado</p>
-              <div className="mt-2 flex items-end justify-between gap-2">
-                <p className="text-2xl font-semibold">{euro(dailyPaceEur)}/día</p>
-                <p className="text-xs text-white/50">{totals?.daysLeft ?? 0} días restantes</p>
-              </div>
-              <p className="mt-2 text-xs text-white/50">
-                Si te mantienes cerca, llegas al final sin pasarte.
-              </p>
-            </Card>
-
-            {/* ====== QUIÉN PAGA ====== */}
-            <Card>
-              <p className="text-sm font-semibold">¿Quién está pagando qué?</p>
-              <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-                <div className="rounded-xl bg-black/40 border border-white/10 p-3">
-                  <p className="text-xs text-white/60">Mío</p>
-                  <p className="mt-1 font-semibold">{euro(byAttrEur.MINE ?? 0)}</p>
-                </div>
-                <div className="rounded-xl bg-black/40 border border-white/10 p-3">
-                  <p className="text-xs text-white/60">Mi mujer</p>
-                  <p className="mt-1 font-semibold">{euro(byAttrEur.PARTNER ?? 0)}</p>
-                </div>
-                <div className="rounded-xl bg-black/40 border border-white/10 p-3">
-                  <p className="text-xs text-white/60">Casa</p>
-                  <p className="mt-1 font-semibold">{euro(byAttrEur.HOUSE ?? 0)}</p>
-                </div>
-              </div>
-
-              <div className="mt-3 grid grid-cols-2 gap-3">
-                <a
-                  href="/add"
-                  className="rounded-2xl bg-white text-black text-center py-3 font-semibold"
-                >
-                  Añadir gasto
-                </a>
-                <a
-                  href="/movements"
-                  className="rounded-2xl bg-white/10 border border-white/10 text-center py-3 font-semibold"
-                >
-                  Movimientos
-                </a>
-              </div>
-            </Card>
-
-            {/* ====== INSIGHTS (solo EXPENSE) ====== */}
-            <Card>
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-semibold">Insights (solo gastos)</p>
-                <p className="text-xs text-white/60">Total: {euro(insights.total)}</p>
-              </div>
-
-              <div className="mt-4">
-                <p className="text-xs text-white/60">Top categorías</p>
-                <div className="mt-2 space-y-3">
-                  {insights.topCategories.length === 0 ? (
-                    <p className="text-white/60 text-sm">Aún no hay gastos.</p>
-                  ) : (
-                    insights.topCategories.map((c) => (
-                      <div key={c.name} className="rounded-xl bg-black/40 border border-white/10 p-3">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-sm font-semibold truncate">{c.name}</p>
-                          <p className="text-sm">{euro(c.sum)}</p>
-                        </div>
-                        <ProgressBar value={c.sum} max={insights.total} />
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              <div className="mt-5">
-                <p className="text-xs text-white/60">Top conceptos</p>
-                <div className="mt-2 space-y-2">
-                  {insights.topConcepts.length === 0 ? (
-                    <p className="text-white/60 text-sm">Aún no hay gastos.</p>
-                  ) : (
-                    insights.topConcepts.map((c) => (
-                      <div
-                        key={c.label}
-                        className="flex items-center justify-between gap-2 rounded-xl bg-black/40 border border-white/10 px-3 py-2"
-                      >
-                        <p className="text-sm font-medium truncate">{c.label}</p>
-                        <p className="text-sm">{euro(c.sum)}</p>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              <p className="mt-3 text-xs text-white/50">
-                Solo cuenta <span className="font-semibold">EXPENSE</span>.
-              </p>
-            </Card>
-
-            {/* ====== AHORROS / HUCHAS ====== */}
-            <Card>
-              <p className="text-sm font-semibold">Ahorros y huchas</p>
-
-              <div className="mt-3 grid grid-cols-1 gap-3">
-                <div className="rounded-xl bg-black/40 border border-white/10 p-3">
-                  <p className="text-xs text-white/60">Fondo de seguridad (banco)</p>
-                  <p className="mt-1 text-xl font-semibold">{euro(safetyEur)}</p>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs text-white/60">Mes activo</p>
+                  <p className="mt-1 text-xl font-semibold truncate">
+                    {openMonth ? monthLabel(openMonth.period_key) : "—"}
+                  </p>
                   <p className="text-xs text-white/50 mt-1">
-                    Solo para imprevistos (y registrarlo en la app).
+                    {openMonth
+                      ? `Del ${formatDate(openMonth.start_date)} al ${formatDate(openMonth.end_date)}`
+                      : "No hay mes abierto"}
                   </p>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="rounded-xl bg-black/40 border border-white/10 p-3">
-                    <p className="text-xs text-white/60">Hucha 2€</p>
-                    <p className="mt-1 text-lg font-semibold">{euro(piggyTwoEur)}</p>
-                    <p className="text-[11px] text-white/40 mt-1">
-                      {piggyTwoEuro?.entries_count ?? 0} entradas
-                    </p>
-                  </div>
-
-                  <div className="rounded-xl bg-black/40 border border-white/10 p-3">
-                    <p className="text-xs text-white/60">Hucha normal</p>
-                    <p className="mt-1 text-lg font-semibold">{euro(piggyNormalEur)}</p>
-                    <p className="text-[11px] text-white/40 mt-1">
-                      {piggyNormal?.entries_count ?? 0} entradas
-                    </p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <a
-                    href="/huchas"
-                    className="rounded-2xl bg-white/10 border border-white/10 text-center py-3 font-semibold"
-                  >
-                    Ver huchas
-                  </a>
-                  <a
-                    href="/imprevisto"
-                    className="rounded-2xl bg-white/10 border border-white/10 text-center py-3 font-semibold"
-                  >
-                    Imprevisto
-                  </a>
-                </div>
+                <a href="/" className="text-sm px-3 py-2 rounded-xl bg-white/10 border border-white/10">
+                  Home
+                </a>
               </div>
+
+              {openMonth ? (
+                <div className="mt-4 space-y-3">
+                  <div className="grid grid-cols-3 gap-2">
+                    <label className="block">
+                      <span className="text-[11px] text-white/60">Ingreso (€)</span>
+                      <input
+                        inputMode="decimal"
+                        className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-2"
+                        value={incomeAmount}
+                        onChange={(e) => setIncomeAmount(sanitizeMoneyTyping(e.target.value))}
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="text-[11px] text-white/60">Ahorro (€)</span>
+                      <input
+                        inputMode="decimal"
+                        className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-2"
+                        value={savingGoalAmount}
+                        onChange={(e) => setSavingGoalAmount(sanitizeMoneyTyping(e.target.value))}
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="text-[11px] text-white/60">Semana (€)</span>
+                      <input
+                        inputMode="decimal"
+                        className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-2"
+                        value={weeklyBudgetAmount}
+                        onChange={(e) => setWeeklyBudgetAmount(sanitizeMoneyTyping(e.target.value))}
+                      />
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={onUpdateOpenMonth}
+                      disabled={busyId === openMonth.id}
+                      className={`rounded-2xl py-3 font-semibold ${
+                        busyId === openMonth.id
+                          ? "bg-white/10 text-white/40 border border-white/10"
+                          : "bg-white text-black"
+                      }`}
+                    >
+                      {busyId === openMonth.id ? "Guardando…" : "Guardar cambios"}
+                    </button>
+
+                    <button
+                      onClick={onCloseMonth}
+                      disabled={busyId === openMonth.id}
+                      className="rounded-2xl py-3 font-semibold bg-white/10 border border-white/10"
+                    >
+                      Cerrar mes
+                    </button>
+                  </div>
+
+                  <p className="text-xs text-white/50">
+                    Presupuesto semanal:{" "}
+                    <span className="font-semibold">{euro(openMonth.weekly_budget_amount_eur ?? 0)}</span>
+                    {" · "}
+                    Ahorro objetivo:{" "}
+                    <span className="font-semibold">{euro(openMonth.saving_goal_amount_eur ?? 0)}</span>
+                  </p>
+                </div>
+              ) : (
+                <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-3 space-y-3">
+                  <p className="text-sm font-semibold">Crear mes nuevo</p>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    <label className="block">
+                      <span className="text-[11px] text-white/60">Ingreso (€)</span>
+                      <input
+                        inputMode="decimal"
+                        className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-2"
+                        value={newIncome}
+                        onChange={(e) => setNewIncome(sanitizeMoneyTyping(e.target.value))}
+                        placeholder="568"
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="text-[11px] text-white/60">Ahorro (€)</span>
+                      <input
+                        inputMode="decimal"
+                        className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-2"
+                        value={newSaving}
+                        onChange={(e) => setNewSaving(sanitizeMoneyTyping(e.target.value))}
+                        placeholder="250"
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="text-[11px] text-white/60">Semana (€)</span>
+                      <input
+                        inputMode="decimal"
+                        className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-2"
+                        value={newWeekly}
+                        onChange={(e) => setNewWeekly(sanitizeMoneyTyping(e.target.value))}
+                        placeholder="50"
+                      />
+                    </label>
+                  </div>
+
+                  <button
+                    onClick={onStartNewMonth}
+                    disabled={busyId === "NEW"}
+                    className={`w-full rounded-2xl py-3 font-semibold ${
+                      busyId === "NEW" ? "bg-white/10 text-white/40 border border-white/10" : "bg-white text-black"
+                    }`}
+                  >
+                    {busyId === "NEW" ? "Creando…" : "Empezar mes"}
+                  </button>
+                </div>
+              )}
             </Card>
+
+            <div className="rounded-2xl border border-white/10 bg-white/5 overflow-hidden">
+              <div className="px-4 py-3 border-b border-white/10 text-sm text-white/60">Historial de meses</div>
+
+              {rows.length === 0 ? (
+                <div className="p-4 text-white/60">No hay meses todavía.</div>
+              ) : (
+                <ul className="divide-y divide-white/10">
+                  {rows.map((m) => {
+                    const label = monthLabel(m.period_key);
+                    const isOpen = m.status === "OPEN";
+                    return (
+                      <li key={m.id} className="p-4 flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold truncate">
+                            {label}{" "}
+                            {isOpen ? (
+                              <span className="ml-2 text-[11px] px-2 py-1 rounded-full bg-green-500/15 border border-green-500/30 text-green-200">
+                                OPEN
+                              </span>
+                            ) : (
+                              <span className="ml-2 text-[11px] px-2 py-1 rounded-full bg-white/10 border border-white/10 text-white/60">
+                                CLOSED
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-xs text-white/50 mt-1">
+                            {formatDate(m.start_date)} → {formatDate(m.end_date)}
+                          </p>
+
+                          <p className="text-xs text-white/50 mt-1">
+                            Ingreso {euro(m.income_amount_eur ?? 0)} · Ahorro {euro(m.saving_goal_amount_eur ?? 0)} ·
+                            Semana {euro(m.weekly_budget_amount_eur ?? 0)}
+                          </p>
+                        </div>
+
+                        <div className="flex flex-col gap-2">
+                          <button
+                            onClick={() => onDeleteMonth(m.id, label)}
+                            disabled={busyId === m.id}
+                            className="px-3 py-2 rounded-xl bg-red-500/10 border border-red-500/30 text-red-200 text-sm font-semibold"
+                          >
+                            {busyId === m.id ? "Borrando…" : "Borrar"}
+                          </button>
+
+                          {isOpen ? (
+                            <button
+                              onClick={onCloseMonth}
+                              disabled={busyId === m.id}
+                              className="px-3 py-2 rounded-xl bg-white/10 border border-white/10 text-sm font-semibold"
+                            >
+                              Cerrar
+                            </button>
+                          ) : null}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+
+            <p className="text-xs text-white/40 px-1">
+              Borrar un mes elimina sus semanas y movimientos. Las huchas no se tocan.
+            </p>
           </div>
         )}
       </Layout>

@@ -49,8 +49,6 @@ function formatDateTimeFromDateString(dateStr, endOfDay = false) {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
   }).format(d);
 }
 
@@ -204,8 +202,14 @@ export default function Home() {
   const piggyNormal = useMemo(() => piggySummary.find((p) => p.type === "NORMAL"), [piggySummary]);
 
   const safetyEur = safety?.balance_eur ?? 0;
-  const piggyTwoEur = piggyTwoEuro?.balance_eur ?? 0;
-  const piggyNormalEur = piggyNormal?.balance_eur ?? 0;
+function centsToEurSafe(cents) {
+  const n = Number(cents);
+  return Number.isFinite(n) ? n  : 0;
+}
+
+// ✅ SIEMPRE desde balance (céntimos). balance_eur lo ignoramos.
+const piggyTwoEur = centsToEurSafe(piggyTwoEuro?.balance ?? 0);
+const piggyNormalEur = centsToEurSafe(piggyNormal?.balance ?? 0);
 
   return (
     <>
@@ -290,19 +294,16 @@ export default function Home() {
             <Card>
               <p className="text-sm font-semibold">Banco y bolsillo</p>
 
-              <div className="mt-3 grid grid-cols-2 gap-3">
+              <div className="mt-3 grid grid-cols-2 gap-3 justify-between text-center">
                 <div className="rounded-xl bg-black/40 border border-white/10 p-3">
                   <p className="text-xs text-white/60">Banco (saldo)</p>
                   <p className="mt-1 text-xl font-semibold">{euro(bankEur)}</p>
-                  <p className="text-xs text-white/50 mt-1">Salida banco (tarjeta + retiradas): {euro(bankOutEur)}</p>
                 </div>
 
                 <div className="rounded-xl bg-black/40 border border-white/10 p-3">
                   <p className="text-xs text-white/60">Bolsillo (saldo)</p>
                   <p className="mt-1 text-xl font-semibold">{euro(cashEur)}</p>
-                  <p className="text-xs text-white/50 mt-1">
-                    Entradas (retiradas): {euro(cashInEur)} · Salidas (cash + hucha + devuelto): {euro(cashOutEur)}
-                  </p>
+                  
                 </div>
               </div>
 
@@ -357,17 +358,28 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="mt-3 grid grid-cols-2 gap-3">
-                <a href="/add" className="rounded-2xl bg-white text-black text-center py-3 font-semibold">
-                  Añadir gasto
-                </a>
-                <a
-                  href="/movements"
-                  className="rounded-2xl bg-white/10 border border-white/10 text-center py-3 font-semibold"
-                >
-                  Movimientos
-                </a>
-              </div>
+              <div className="mt-3 grid grid-cols-3 gap-3">
+  <a
+    href="/add"
+    className="rounded-2xl bg-white text-black text-center py-3 font-semibold"
+  >
+    Gasto
+  </a>
+
+  <a
+    href="/add-income"
+    className="rounded-2xl bg-green-400 text-black text-center py-3 font-semibold"
+  >
+    Ingreso
+  </a>
+
+  <a
+    href="/movements"
+    className="rounded-2xl bg-white/10 border border-white/10 text-center py-3 font-semibold"
+  >
+    Movs
+  </a>
+</div>
             </Card>
 
             <Card>
