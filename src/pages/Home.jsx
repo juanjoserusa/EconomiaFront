@@ -6,19 +6,14 @@ import { getTransactions } from "../api/transactions";
 import { api } from "../api/client";
 
 function Card({ children }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-      {children}
-    </div>
-  );
+  return <div className="rounded-2xl border border-white/10 bg-white/5 p-4">{children}</div>;
 }
 
 function euro(n) {
   const num = Number(n);
-  return new Intl.NumberFormat("es-ES", {
-    style: "currency",
-    currency: "EUR",
-  }).format(Number.isFinite(num) ? num : 0);
+  return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(
+    Number.isFinite(num) ? num : 0
+  );
 }
 
 function clamp(n, min, max) {
@@ -34,20 +29,14 @@ function ProgressBar({ value, max }) {
   );
 }
 
-// ---------- FECHAS BONITAS ----------
 function formatMonthLabel(periodKey) {
   if (!periodKey) return "—";
   const [y, m] = String(periodKey).split("-");
   const monthIndex = Number(m) - 1;
-  if (!Number.isFinite(monthIndex) || monthIndex < 0 || monthIndex > 11)
-    return periodKey;
+  if (!Number.isFinite(monthIndex) || monthIndex < 0 || monthIndex > 11) return periodKey;
 
   const d = new Date(Number(y), monthIndex, 1);
-  const label = new Intl.DateTimeFormat("es-ES", {
-    month: "long",
-    year: "numeric",
-  }).format(d);
-
+  const label = new Intl.DateTimeFormat("es-ES", { month: "long", year: "numeric" }).format(d);
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
@@ -75,7 +64,6 @@ async function getPiggybanksSummary() {
   return api("/piggybanks/summary");
 }
 
-// ===== helper: amount en euros desde tx (preferimos amount_eur) =====
 function getAmountEur(t) {
   if (t?.amount_eur !== undefined && t?.amount_eur !== null) {
     const n = Number(t.amount_eur);
@@ -93,11 +81,9 @@ export default function Home() {
   const [summary, setSummary] = useState(null);
   const [tx, setTx] = useState([]);
 
-  // backend nuevo: safety.balance = cents, safety.balance_eur = euros
   const [safety, setSafety] = useState({ balance: 0, balance_eur: 0 });
   const [piggySummary, setPiggySummary] = useState([]);
 
-  // form start month
   const [incomeAmount, setIncomeAmount] = useState("");
   const [savingGoalAmount, setSavingGoalAmount] = useState("");
   const [weeklyBudgetAmount, setWeeklyBudgetAmount] = useState("");
@@ -142,7 +128,6 @@ export default function Home() {
   async function handleStartMonth() {
     setError("");
     try {
-      // MUY IMPORTANTE: enviar strings tal cual, para que el backend parsee "1,60"
       const payload = {
         incomeAmount: String(incomeAmount).trim(),
         savingGoalAmount: String(savingGoalAmount).trim(),
@@ -156,11 +141,17 @@ export default function Home() {
     }
   }
 
-  // ===================== SUMMARY DATA (BACKEND NUEVO) =====================
-  const totals = summary?.totals || null; // cents + *_eur
+  const totals = summary?.totals || null;
   const week = summary?.week || null;
 
-  // Para pintar: usa siempre *_eur
+  // ✅ NUEVO: balances bank/cash desde backend
+  const balances = summary?.balances || null;
+  const bankEur = balances?.bank_eur ?? 0;
+  const cashEur = balances?.cash_eur ?? 0;
+  const bankOutEur = balances?.bank_out_eur ?? 0;
+  const cashOutEur = balances?.cash_out_eur ?? 0;
+  const cashInEur = balances?.cash_in_eur ?? 0;
+
   const remainingWeekEur = totals?.remainingWeek_eur ?? 0;
   const weekSpentEur = totals?.weekSpent_eur ?? 0;
   const remainingMonthEur = totals?.remainingMonth_eur ?? 0;
@@ -168,13 +159,8 @@ export default function Home() {
   const totalIncomeEur = totals?.totalIncome_eur ?? 0;
   const dailyPaceEur = totals?.dailyPace_eur ?? 0;
 
-  const byAttrEur = totals?.byAttr_eur || {
-    MINE: 0,
-    PARTNER: 0,
-    HOUSE: 0,
-  };
+  const byAttrEur = totals?.byAttr_eur || { MINE: 0, PARTNER: 0, HOUSE: 0 };
 
-  // month: usa los campos eur del backend
   const monthLabel = formatMonthLabel(month?.period_key);
   const monthIncomeEur = month?.income_amount_eur ?? 0;
   const monthSavingGoalEur = month?.saving_goal_amount_eur ?? 0;
@@ -187,7 +173,6 @@ export default function Home() {
       )}`
     : "Semana no disponible";
 
-  // ===================== INSIGHTS (solo EXPENSE OUT) =====================
   const insights = useMemo(() => {
     const expenses = tx.filter((t) => t.direction === "OUT" && t.type === "EXPENSE");
     const total = expenses.reduce((a, t) => a + getAmountEur(t), 0);
@@ -215,15 +200,8 @@ export default function Home() {
     return { total, topCategories, topConcepts };
   }, [tx]);
 
-  // ===================== PIGGYBANKS (BACKEND NUEVO) =====================
-  const piggyTwoEuro = useMemo(
-    () => piggySummary.find((p) => p.type === "TWO_EURO"),
-    [piggySummary]
-  );
-  const piggyNormal = useMemo(
-    () => piggySummary.find((p) => p.type === "NORMAL"),
-    [piggySummary]
-  );
+  const piggyTwoEuro = useMemo(() => piggySummary.find((p) => p.type === "TWO_EURO"), [piggySummary]);
+  const piggyNormal = useMemo(() => piggySummary.find((p) => p.type === "NORMAL"), [piggySummary]);
 
   const safetyEur = safety?.balance_eur ?? 0;
   const piggyTwoEur = piggyTwoEuro?.balance_eur ?? 0;
@@ -234,10 +212,7 @@ export default function Home() {
       <Layout
         title="Home"
         rightSlot={
-          <button
-            onClick={load}
-            className="text-sm px-3 py-2 rounded-xl bg-white/10 border border-white/10"
-          >
+          <button onClick={load} className="text-sm px-3 py-2 rounded-xl bg-white/10 border border-white/10">
             Refresh
           </button>
         }
@@ -254,9 +229,7 @@ export default function Home() {
           <div className="space-y-4">
             <Card>
               <p className="text-white/60 text-sm">No hay mes abierto</p>
-              <p className="mt-1 text-lg font-semibold">
-                Inicia el mes para empezar a registrar gastos.
-              </p>
+              <p className="mt-1 text-lg font-semibold">Inicia el mes para empezar a registrar gastos.</p>
             </Card>
 
             <Card>
@@ -296,10 +269,7 @@ export default function Home() {
                   />
                 </label>
 
-                <button
-                  onClick={handleStartMonth}
-                  className="w-full rounded-2xl bg-white text-black py-3 font-semibold"
-                >
+                <button onClick={handleStartMonth} className="w-full rounded-2xl bg-white text-black py-3 font-semibold">
                   Empezar mes
                 </button>
               </div>
@@ -307,7 +277,6 @@ export default function Home() {
           </div>
         ) : (
           <div className="space-y-4">
-            {/* ====== CABECERA MES ====== */}
             <Card>
               <p className="text-white/60 text-sm">Mes activo</p>
               <p className="mt-1 text-2xl font-semibold">{monthLabel}</p>
@@ -317,7 +286,31 @@ export default function Home() {
               </p>
             </Card>
 
-            {/* ====== KPI Semana/Mes ====== */}
+            {/* ✅ NUEVO: Banco / Bolsillo */}
+            <Card>
+              <p className="text-sm font-semibold">Banco y bolsillo</p>
+
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <div className="rounded-xl bg-black/40 border border-white/10 p-3">
+                  <p className="text-xs text-white/60">Banco (saldo)</p>
+                  <p className="mt-1 text-xl font-semibold">{euro(bankEur)}</p>
+                  <p className="text-xs text-white/50 mt-1">Salida banco (tarjeta + retiradas): {euro(bankOutEur)}</p>
+                </div>
+
+                <div className="rounded-xl bg-black/40 border border-white/10 p-3">
+                  <p className="text-xs text-white/60">Bolsillo (saldo)</p>
+                  <p className="mt-1 text-xl font-semibold">{euro(cashEur)}</p>
+                  <p className="text-xs text-white/50 mt-1">
+                    Entradas (retiradas): {euro(cashInEur)} · Salidas (cash + hucha + devuelto): {euro(cashOutEur)}
+                  </p>
+                </div>
+              </div>
+
+              <p className="mt-2 text-[11px] text-white/50">
+                Tarjeta/transferencia resta del banco. Efectivo resta del bolsillo. La retirada semanal mueve banco → bolsillo.
+              </p>
+            </Card>
+
             <div className="grid grid-cols-2 gap-3">
               <Card>
                 <p className="text-xs text-white/60">Queda esta semana</p>
@@ -338,19 +331,15 @@ export default function Home() {
               </Card>
             </div>
 
-            {/* ====== RITMO ====== */}
             <Card>
               <p className="text-xs text-white/60">Ritmo diario recomendado</p>
               <div className="mt-2 flex items-end justify-between gap-2">
                 <p className="text-2xl font-semibold">{euro(dailyPaceEur)}/día</p>
                 <p className="text-xs text-white/50">{totals?.daysLeft ?? 0} días restantes</p>
               </div>
-              <p className="mt-2 text-xs text-white/50">
-                Si te mantienes cerca, llegas al final sin pasarte.
-              </p>
+              <p className="mt-2 text-xs text-white/50">Si te mantienes cerca, llegas al final sin pasarte.</p>
             </Card>
 
-            {/* ====== QUIÉN PAGA ====== */}
             <Card>
               <p className="text-sm font-semibold">¿Quién está pagando qué?</p>
               <div className="mt-3 grid grid-cols-3 gap-2 text-center">
@@ -369,10 +358,7 @@ export default function Home() {
               </div>
 
               <div className="mt-3 grid grid-cols-2 gap-3">
-                <a
-                  href="/add"
-                  className="rounded-2xl bg-white text-black text-center py-3 font-semibold"
-                >
+                <a href="/add" className="rounded-2xl bg-white text-black text-center py-3 font-semibold">
                   Añadir gasto
                 </a>
                 <a
@@ -384,7 +370,6 @@ export default function Home() {
               </div>
             </Card>
 
-            {/* ====== INSIGHTS (solo EXPENSE) ====== */}
             <Card>
               <div className="flex items-center justify-between gap-2">
                 <p className="text-sm font-semibold">Insights (solo gastos)</p>
@@ -434,7 +419,6 @@ export default function Home() {
               </p>
             </Card>
 
-            {/* ====== AHORROS / HUCHAS ====== */}
             <Card>
               <p className="text-sm font-semibold">Ahorros y huchas</p>
 
@@ -442,26 +426,20 @@ export default function Home() {
                 <div className="rounded-xl bg-black/40 border border-white/10 p-3">
                   <p className="text-xs text-white/60">Fondo de seguridad (banco)</p>
                   <p className="mt-1 text-xl font-semibold">{euro(safetyEur)}</p>
-                  <p className="text-xs text-white/50 mt-1">
-                    Solo para imprevistos (y registrarlo en la app).
-                  </p>
+                  <p className="text-xs text-white/50 mt-1">Solo para imprevistos (y registrarlo en la app).</p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div className="rounded-xl bg-black/40 border border-white/10 p-3">
                     <p className="text-xs text-white/60">Hucha 2€</p>
                     <p className="mt-1 text-lg font-semibold">{euro(piggyTwoEur)}</p>
-                    <p className="text-[11px] text-white/40 mt-1">
-                      {piggyTwoEuro?.entries_count ?? 0} entradas
-                    </p>
+                    <p className="text-[11px] text-white/40 mt-1">{piggyTwoEuro?.entries_count ?? 0} entradas</p>
                   </div>
 
                   <div className="rounded-xl bg-black/40 border border-white/10 p-3">
                     <p className="text-xs text-white/60">Hucha normal</p>
                     <p className="mt-1 text-lg font-semibold">{euro(piggyNormalEur)}</p>
-                    <p className="text-[11px] text-white/40 mt-1">
-                      {piggyNormal?.entries_count ?? 0} entradas
-                    </p>
+                    <p className="text-[11px] text-white/40 mt-1">{piggyNormal?.entries_count ?? 0} entradas</p>
                   </div>
                 </div>
 

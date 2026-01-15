@@ -5,7 +5,9 @@ import { getCurrentMonth } from "../api/month";
 import { getTransactions } from "../api/transactions";
 
 function formatEuro(n) {
-  return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(n);
+  return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(
+    Number.isFinite(Number(n)) ? Number(n) : 0
+  );
 }
 
 function formatDateTime(iso) {
@@ -18,7 +20,6 @@ function formatDateTime(iso) {
   }).format(d);
 }
 
-// ✅ Siempre devolvemos euros (con decimales) aunque venga en cents
 function getAmountEur(t) {
   if (t?.amount_eur !== undefined && t?.amount_eur !== null) {
     const n = Number(t.amount_eur);
@@ -35,18 +36,47 @@ const ATTR_OPTIONS = [
   { value: "HOUSE", label: "Casa" },
 ];
 
+const TYPE_OPTIONS = [
+  { value: "ALL", label: "Todos" },
+  { value: "EXPENSE", label: "Gastos" },
+  { value: "EXTRA_INCOME", label: "Ingresos extra" },
+  { value: "CASH_WITHDRAWAL", label: "Retirada efectivo" },
+  { value: "CASH_RETURN", label: "Devolver al banco" },
+  { value: "PIGGYBANK_DEPOSIT", label: "Aporte hucha" },
+  { value: "CONSOLIDATE_TO_SAFETY", label: "Consolidar a fondo" },
+  { value: "EMERGENCY_FROM_SAFETY", label: "Imprevisto (fondo)" },
+];
+
 function Chip({ active, children, onClick }) {
   return (
     <button
       onClick={onClick}
       className={`px-3 py-1.5 rounded-xl text-xs font-semibold border ${
-        active
-          ? "bg-white text-black border-white"
-          : "bg-white/10 text-white border-white/10"
+        active ? "bg-white text-black border-white" : "bg-white/10 text-white border-white/10"
       }`}
     >
       {children}
     </button>
+  );
+}
+
+function TypeBadge({ type }) {
+  const map = {
+    EXPENSE: "GASTO",
+    EXTRA_INCOME: "INGRESO",
+    CASH_WITHDRAWAL: "RETIRADA",
+    CASH_RETURN: "DEVUELTO",
+    PIGGYBANK_DEPOSIT: "HUCHA",
+    CONSOLIDATE_TO_SAFETY: "FONDO +",
+    EMERGENCY_FROM_SAFETY: "FONDO -",
+  };
+
+  const label = map[type] || type || "—";
+
+  return (
+    <span className="inline-flex items-center px-2 py-1 rounded-full text-[10px] font-semibold bg-white/10 border border-white/10 text-white/70">
+      {label}
+    </span>
   );
 }
 
@@ -58,6 +88,7 @@ export default function Movements() {
 
   // filtros
   const [attrFilter, setAttrFilter] = useState("ALL");
+  const [typeFilter, setTypeFilter] = useState("ALL");
   const [categoryFilter, setCategoryFilter] = useState("ALL");
   const [search, setSearch] = useState("");
 
@@ -69,12 +100,12 @@ export default function Movements() {
       setMonth(m);
       if (m?.id) {
         const rows = await getTransactions(m.id);
-        setTx(rows);
+        setTx(rows || []);
       } else {
         setTx([]);
       }
     } catch (e) {
-      setError(e.message);
+      setError(e?.message || "Error cargando movimientos");
     } finally {
       setLoading(false);
     }
@@ -84,7 +115,7 @@ export default function Movements() {
     load();
   }, []);
 
-  // categorías disponibles (a partir de lo que venga en los movimientos)
+  // categorías disponibles (a partir de movimientos)
   const categoryOptions = useMemo(() => {
     const set = new Map(); // id -> name
     for (const t of tx) {
@@ -92,20 +123,24 @@ export default function Movements() {
         set.set(t.category_id, t.category_name || "Sin nombre");
       }
     }
-    const arr = Array.from(set.entries())
+    return Array.from(set.entries())
       .map(([id, name]) => ({ id, name }))
       .sort((a, b) => a.name.localeCompare(b.name));
-    return arr;
   }, [tx]);
 
-  // lista filtrada
   const filteredTx = useMemo(() => {
     const q = search.trim().toLowerCase();
 
-    return tx
+    return (tx || [])
       .filter((t) => {
         if (attrFilter !== "ALL" && t.attribution !== attrFilter) return false;
-        if (categoryFilter !== "ALL" && t.category_id !== categoryFilter) return false;
+        if (typeFilter !== "ALL" && t.type !== typeFilter) return false;
+
+        // category solo aplica a EXPENSE (si filtras categoría y el movimiento no es gasto, fuera)
+        if (categoryFilter !== "ALL") {
+          if (t.type !== "EXPENSE") return false;
+          if (t.category_id !== categoryFilter) return false;
+        }
 
         if (!q) return true;
 
@@ -124,16 +159,29 @@ export default function Movements() {
         return haystack.includes(q);
       })
       .sort((a, b) => new Date(b.date_time) - new Date(a.date_time));
-  }, [tx, attrFilter, categoryFilter, search]);
+  }, [tx, attrFilter, typeFilter, categoryFilter, search]);
 
-  // ✅ suma en euros
-  const totalOutFiltered = useMemo(() => {
-    return filteredTx
-      .filter((t) => t.direction === "OUT" && t.type === "EXPENSE")
+  // Totales útiles para tu modelo B
+  const totals = useMemo(() => {
+    const expenses = filteredTx.filter((t) => t.direction === "OUT" && t.type === "EXPENSE");
+
+    const totalExpense = expenses.reduce((acc, t) => acc + getAmountEur(t), 0);
+    const totalExpenseCash = expenses
+      .filter((t) => t.payment_method === "CASH")
       .reduce((acc, t) => acc + getAmountEur(t), 0);
+    const totalExpenseBank = expenses
+      .filter((t) => t.payment_method === "CARD" || t.payment_method === "TRANSFER")
+      .reduce((acc, t) => acc + getAmountEur(t), 0);
+
+    return {
+      count: filteredTx.length,
+      totalExpense,
+      totalExpenseCash,
+      totalExpenseBank,
+    };
   }, [filteredTx]);
 
-  const countFiltered = filteredTx.length;
+  const hasFilters = attrFilter !== "ALL" || typeFilter !== "ALL" || categoryFilter !== "ALL" || search.trim();
 
   return (
     <>
@@ -166,30 +214,58 @@ export default function Movements() {
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
               <p className="text-white/60 text-sm">Mes {month.period_key}</p>
               <p className="mt-1 text-xl font-semibold">
-                Gastos (EXPENSE filtrados): {formatEuro(totalOutFiltered)}
+                Gastos (EXPENSE filtrados): {formatEuro(totals.totalExpense)}
               </p>
-              <p className="text-xs text-white/50 mt-1">
-                Movimientos mostrados: {countFiltered}
-              </p>
+
+              <div className="mt-2 grid grid-cols-2 gap-3 text-sm">
+                <div className="rounded-xl bg-black/40 border border-white/10 p-3">
+                  <p className="text-xs text-white/60">Gasto en efectivo</p>
+                  <p className="mt-1 font-semibold">{formatEuro(totals.totalExpenseCash)}</p>
+                </div>
+                <div className="rounded-xl bg-black/40 border border-white/10 p-3">
+                  <p className="text-xs text-white/60">Gasto banco (tarjeta/transfer)</p>
+                  <p className="mt-1 font-semibold">{formatEuro(totals.totalExpenseBank)}</p>
+                </div>
+              </div>
+
+              <p className="text-xs text-white/50 mt-2">Movimientos mostrados: {totals.count}</p>
             </div>
 
             {/* FILTROS */}
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4 space-y-3">
-              <div className="flex flex-wrap gap-2">
-                {ATTR_OPTIONS.map((opt) => (
-                  <Chip
-                    key={opt.value}
-                    active={attrFilter === opt.value}
-                    onClick={() => setAttrFilter(opt.value)}
-                  >
-                    {opt.label}
-                  </Chip>
-                ))}
+              <div>
+                <p className="text-xs text-white/60 mb-2">Quién paga</p>
+                <div className="flex flex-wrap gap-2">
+                  {ATTR_OPTIONS.map((opt) => (
+                    <Chip
+                      key={opt.value}
+                      active={attrFilter === opt.value}
+                      onClick={() => setAttrFilter(opt.value)}
+                    >
+                      {opt.label}
+                    </Chip>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <p className="text-xs text-white/60 mb-2">Tipo</p>
+                <div className="flex flex-wrap gap-2">
+                  {TYPE_OPTIONS.map((opt) => (
+                    <Chip
+                      key={opt.value}
+                      active={typeFilter === opt.value}
+                      onClick={() => setTypeFilter(opt.value)}
+                    >
+                      {opt.label}
+                    </Chip>
+                  ))}
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
-                  <span className="text-xs text-white/60">Categoría</span>
+                  <span className="text-xs text-white/60">Categoría (solo gastos)</span>
                   <select
                     className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-3"
                     value={categoryFilter}
@@ -215,10 +291,11 @@ export default function Movements() {
                 </label>
               </div>
 
-              {(attrFilter !== "ALL" || categoryFilter !== "ALL" || search.trim()) && (
+              {hasFilters ? (
                 <button
                   onClick={() => {
                     setAttrFilter("ALL");
+                    setTypeFilter("ALL");
                     setCategoryFilter("ALL");
                     setSearch("");
                   }}
@@ -226,7 +303,7 @@ export default function Movements() {
                 >
                   Limpiar filtros
                 </button>
-              )}
+              ) : null}
             </div>
 
             {/* LISTA */}
@@ -236,26 +313,30 @@ export default function Movements() {
               </div>
 
               {filteredTx.length === 0 ? (
-                <div className="p-4 text-white/60">
-                  No hay resultados con estos filtros.
-                </div>
+                <div className="p-4 text-white/60">No hay resultados con estos filtros.</div>
               ) : (
                 <ul className="divide-y divide-white/10">
                   {filteredTx.map((t) => {
                     const amountEur = getAmountEur(t);
+                    const sign = t.direction === "OUT" ? "-" : "+";
+                    const title = t.concept || t.note || t.category_name || "—";
+
                     return (
                       <li key={t.id} className="p-4 flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <p className="text-sm text-white/60">
-                            {formatDateTime(t.date_time)} · {t.category_name || t.type}
-                          </p>
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm text-white/60">
+                              {formatDateTime(t.date_time)}
+                            </p>
+                            <TypeBadge type={t.type} />
+                          </div>
 
-                          <p className="mt-1 font-medium truncate">
-                            {t.concept || "—"}
-                          </p>
+                          <p className="mt-1 font-medium truncate">{title}</p>
 
                           <p className="text-xs text-white/50 mt-1">
-                            {t.attribution} · {t.payment_method}
+                            {t.type === "EXPENSE"
+                              ? `${t.category_name || "—"} · ${t.attribution} · ${t.payment_method}`
+                              : `${t.attribution} · ${t.payment_method}`}
                           </p>
 
                           <div className="mt-2 flex gap-2">
@@ -273,7 +354,7 @@ export default function Movements() {
                             t.direction === "OUT" ? "text-white" : "text-green-300"
                           }`}
                         >
-                          {t.direction === "OUT" ? "-" : "+"}
+                          {sign}
                           {formatEuro(amountEur)}
                         </div>
                       </li>

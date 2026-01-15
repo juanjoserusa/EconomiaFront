@@ -1,87 +1,135 @@
 import { useEffect, useMemo, useState } from "react";
 import Layout from "../components/Layout";
 import BottomNav from "../components/BottomNav";
+import { getCurrentMonth, startMonth } from "../api/month";
+import { getTransactions } from "../api/transactions";
+import { api } from "../api/client";
 
-import { getMonths, updateMonth, closeMonth, deleteMonth, startMonth } from "../api/month";
-
-function euro(n) {
-  const num = Number(n);
-  return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(
-    Number.isFinite(num) ? num : 0
+function Card({ children }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+      {children}
+    </div>
   );
 }
 
-function monthLabel(periodKey) {
+function euro(n) {
+  const num = Number(n);
+  return new Intl.NumberFormat("es-ES", {
+    style: "currency",
+    currency: "EUR",
+  }).format(Number.isFinite(num) ? num : 0);
+}
+
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function ProgressBar({ value, max }) {
+  const pct = max > 0 ? clamp(Math.round((value / max) * 100), 0, 100) : 0;
+  return (
+    <div className="mt-2 h-2 w-full rounded-full bg-white/10 overflow-hidden">
+      <div className="h-2 rounded-full bg-white" style={{ width: `${pct}%` }} />
+    </div>
+  );
+}
+
+// ---------- FECHAS BONITAS ----------
+function formatMonthLabel(periodKey) {
   if (!periodKey) return "—";
   const [y, m] = String(periodKey).split("-");
-  const idx = Number(m) - 1;
-  if (idx < 0 || idx > 11) return periodKey;
-  const d = new Date(Number(y), idx, 1);
-  const label = new Intl.DateTimeFormat("es-ES", { month: "long", year: "numeric" }).format(d);
+  const monthIndex = Number(m) - 1;
+  if (!Number.isFinite(monthIndex) || monthIndex < 0 || monthIndex > 11)
+    return periodKey;
+
+  const d = new Date(Number(y), monthIndex, 1);
+  const label = new Intl.DateTimeFormat("es-ES", {
+    month: "long",
+    year: "numeric",
+  }).format(d);
+
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
-function formatDate(dateStr) {
+function formatDateTimeFromDateString(dateStr, endOfDay = false) {
   if (!dateStr) return "—";
   const d = new Date(dateStr);
-  return new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" }).format(d);
+  d.setHours(endOfDay ? 23 : 0, endOfDay ? 59 : 0, 0, 0);
+
+  return new Intl.DateTimeFormat("es-ES", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(d);
 }
 
-function Card({ children }) {
-  return <div className="rounded-2xl border border-white/10 bg-white/5 p-4">{children}</div>;
+async function getSummaryCurrent() {
+  return api("/summary/current");
+}
+async function getSafetyBalance() {
+  return api("/safety/balance");
+}
+async function getPiggybanksSummary() {
+  return api("/piggybanks/summary");
 }
 
-// ----- Helpers para trabajar SIEMPRE en euros en UI -----
-function getMonthAmountEur(m, key) {
-  // Preferimos el campo _eur si viene
-  const eurKey = `${key}_eur`; // income_amount_eur, saving_goal_amount_eur, weekly_budget_amount_eur
-  if (m && m[eurKey] !== undefined && m[eurKey] !== null) {
-    const n = Number(m[eurKey]);
+// ===== helper: amount en euros desde tx (preferimos amount_eur) =====
+function getAmountEur(t) {
+  if (t?.amount_eur !== undefined && t?.amount_eur !== null) {
+    const n = Number(t.amount_eur);
     return Number.isFinite(n) ? n : 0;
   }
-  // fallback: si solo viene en céntimos
-  const cents = Number(m?.[key] ?? 0);
+  const cents = Number(t?.amount ?? 0);
   return Number.isFinite(cents) ? cents / 100 : 0;
 }
 
-function toInputEurString(n) {
-  // para inputs: 2500 / 400 / 150 / 1.60 etc.
-  const num = Number(n);
-  if (!Number.isFinite(num)) return "";
-  // quitamos trailing zeros para que no moleste: 1.00 -> 1, 1.50 -> 1.5
-  const s = String(num);
-  return s;
-}
-
-export default function Months() {
-  const [rows, setRows] = useState([]);
+export default function Home() {
   const [loading, setLoading] = useState(true);
-  const [busyId, setBusyId] = useState("");
   const [error, setError] = useState("");
-  const [ok, setOk] = useState("");
 
-  // Editor (para el mes OPEN) -> inputs EN EUROS (string)
-  const [editId, setEditId] = useState("");
+  const [month, setMonth] = useState(null);
+  const [summary, setSummary] = useState(null);
+  const [tx, setTx] = useState([]);
+
+  // backend nuevo: safety.balance = cents, safety.balance_eur = euros
+  const [safety, setSafety] = useState({ balance: 0, balance_eur: 0 });
+  const [piggySummary, setPiggySummary] = useState([]);
+
+  // form start month
   const [incomeAmount, setIncomeAmount] = useState("");
   const [savingGoalAmount, setSavingGoalAmount] = useState("");
   const [weeklyBudgetAmount, setWeeklyBudgetAmount] = useState("");
 
-  // Crear mes nuevo -> inputs EN EUROS (string)
-  const [newIncome, setNewIncome] = useState("");
-  const [newSaving, setNewSaving] = useState("");
-  const [newWeekly, setNewWeekly] = useState("");
-
-  const openMonth = useMemo(() => rows.find((m) => m.status === "OPEN") || null, [rows]);
-
   async function load() {
     setLoading(true);
     setError("");
-    setOk("");
+
     try {
-      const m = await getMonths();
-      setRows(m || []);
+      const s = await getSummaryCurrent();
+      setSummary(s);
+
+      const m = s?.month ? s.month : await getCurrentMonth();
+      setMonth(m || null);
+
+      if (m?.id) {
+        const [rows, sb, pbs] = await Promise.all([
+          getTransactions(m.id),
+          getSafetyBalance(),
+          getPiggybanksSummary(),
+        ]);
+
+        setTx(rows || []);
+        setSafety(sb || { balance: 0, balance_eur: 0 });
+        setPiggySummary(pbs || []);
+      } else {
+        setTx([]);
+        setSafety({ balance: 0, balance_eur: 0 });
+        setPiggySummary([]);
+      }
     } catch (e) {
-      setError(e?.message || "Error cargando meses");
+      setError(e?.message || "Error cargando datos");
     } finally {
       setLoading(false);
     }
@@ -91,136 +139,105 @@ export default function Months() {
     load();
   }, []);
 
-  // Precarga editor en € (no en céntimos)
-  useEffect(() => {
-    if (openMonth?.id) {
-      setEditId(openMonth.id);
-
-      const incomeEur = getMonthAmountEur(openMonth, "income_amount");
-      const savingEur = getMonthAmountEur(openMonth, "saving_goal_amount");
-      const weeklyEur = getMonthAmountEur(openMonth, "weekly_budget_amount");
-
-      setIncomeAmount(toInputEurString(incomeEur));
-      setSavingGoalAmount(toInputEurString(savingEur));
-      setWeeklyBudgetAmount(toInputEurString(weeklyEur));
-    } else {
-      setEditId("");
-      setIncomeAmount("");
-      setSavingGoalAmount("");
-      setWeeklyBudgetAmount("");
-    }
-  }, [openMonth?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  function flashOk(msg) {
-    setOk(msg);
-    setTimeout(() => setOk(""), 1200);
-  }
-
-  async function onUpdateOpenMonth() {
-    if (!editId) return;
-
-    // 🔥 IMPORTANTE: enviar strings para que el backend parsee "1,60" bien
-    const payload = {};
-    if (incomeAmount !== "") payload.incomeAmount = String(incomeAmount).trim();
-    if (savingGoalAmount !== "") payload.savingGoalAmount = String(savingGoalAmount).trim();
-    if (weeklyBudgetAmount !== "") payload.weeklyBudgetAmount = String(weeklyBudgetAmount).trim();
-
-    setBusyId(editId);
+  async function handleStartMonth() {
     setError("");
-    setOk("");
     try {
-      await updateMonth(editId, payload);
-      flashOk("Mes actualizado ✅");
+      // MUY IMPORTANTE: enviar strings tal cual, para que el backend parsee "1,60"
+      const payload = {
+        incomeAmount: String(incomeAmount).trim(),
+        savingGoalAmount: String(savingGoalAmount).trim(),
+        weeklyBudgetAmount: String(weeklyBudgetAmount).trim(),
+      };
+
+      await startMonth(payload);
       await load();
     } catch (e) {
-      setError(e?.message || "Error actualizando mes");
-    } finally {
-      setBusyId("");
+      setError(e?.message || "Error iniciando mes");
     }
   }
 
-  async function onCloseMonth() {
-    if (!openMonth?.id) return;
-    const sure = window.confirm(
-      `¿Cerrar ${monthLabel(openMonth.period_key)}?\n\nEsto consolidará ahorro + sobrante al fondo y cerrará el mes.`
-    );
-    if (!sure) return;
+  // ===================== SUMMARY DATA (BACKEND NUEVO) =====================
+  const totals = summary?.totals || null; // cents + *_eur
+  const week = summary?.week || null;
 
-    setBusyId(openMonth.id);
-    setError("");
-    setOk("");
-    try {
-      await closeMonth(openMonth.id);
-      flashOk("Mes cerrado ✅");
-      await load();
-    } catch (e) {
-      setError(e?.message || "Error cerrando mes");
-    } finally {
-      setBusyId("");
+  // Para pintar: usa siempre *_eur
+  const remainingWeekEur = totals?.remainingWeek_eur ?? 0;
+  const weekSpentEur = totals?.weekSpent_eur ?? 0;
+  const remainingMonthEur = totals?.remainingMonth_eur ?? 0;
+  const totalExpensesEur = totals?.totalExpenses_eur ?? 0;
+  const totalIncomeEur = totals?.totalIncome_eur ?? 0;
+  const dailyPaceEur = totals?.dailyPace_eur ?? 0;
+
+  const byAttrEur = totals?.byAttr_eur || {
+    MINE: 0,
+    PARTNER: 0,
+    HOUSE: 0,
+  };
+
+  // month: usa los campos eur del backend
+  const monthLabel = formatMonthLabel(month?.period_key);
+  const monthIncomeEur = month?.income_amount_eur ?? 0;
+  const monthSavingGoalEur = month?.saving_goal_amount_eur ?? 0;
+  const monthWeeklyBudgetEur = month?.weekly_budget_amount_eur ?? 0;
+
+  const weekRangeLabel = week
+    ? `${formatDateTimeFromDateString(week.start_date, false)} → ${formatDateTimeFromDateString(
+        week.end_date,
+        true
+      )}`
+    : "Semana no disponible";
+
+  // ===================== INSIGHTS (solo EXPENSE OUT) =====================
+  const insights = useMemo(() => {
+    const expenses = tx.filter((t) => t.direction === "OUT" && t.type === "EXPENSE");
+    const total = expenses.reduce((a, t) => a + getAmountEur(t), 0);
+
+    const catMap = new Map();
+    for (const t of expenses) {
+      const key = t.category_name || "Sin categoría";
+      catMap.set(key, (catMap.get(key) || 0) + getAmountEur(t));
     }
-  }
+    const topCategories = Array.from(catMap.entries())
+      .map(([name, sum]) => ({ name, sum }))
+      .sort((a, b) => b.sum - a.sum)
+      .slice(0, 5);
 
-  async function onDeleteMonth(monthId, label) {
-    const sure = window.confirm(
-      `¿Borrar el mes ${label}?\n\nSe borrarán también sus semanas y movimientos.\nLas huchas NO se tocan.`
-    );
-    if (!sure) return;
-
-    setBusyId(monthId);
-    setError("");
-    setOk("");
-    try {
-      await deleteMonth(monthId);
-      flashOk("Mes borrado ✅");
-      await load();
-    } catch (e) {
-      setError(e?.message || "Error borrando mes");
-    } finally {
-      setBusyId("");
+    const conceptMap = new Map();
+    for (const t of expenses) {
+      const key = t.concept?.trim() ? t.concept.trim() : t.category_name || "—";
+      conceptMap.set(key, (conceptMap.get(key) || 0) + getAmountEur(t));
     }
-  }
+    const topConcepts = Array.from(conceptMap.entries())
+      .map(([label, sum]) => ({ label, sum }))
+      .sort((a, b) => b.sum - a.sum)
+      .slice(0, 5);
 
-  async function onStartNewMonth() {
-    setError("");
-    setOk("");
+    return { total, topCategories, topConcepts };
+  }, [tx]);
 
-    if (openMonth) {
-      setError("Ya existe un mes OPEN. Ciérralo o bórralo antes de crear otro.");
-      return;
-    }
+  // ===================== PIGGYBANKS (BACKEND NUEVO) =====================
+  const piggyTwoEuro = useMemo(
+    () => piggySummary.find((p) => p.type === "TWO_EURO"),
+    [piggySummary]
+  );
+  const piggyNormal = useMemo(
+    () => piggySummary.find((p) => p.type === "NORMAL"),
+    [piggySummary]
+  );
 
-    if (!newIncome || !newSaving || !newWeekly) {
-      setError("Rellena ingreso, ahorro objetivo y presupuesto semanal.");
-      return;
-    }
-
-    setBusyId("NEW");
-    try {
-      // 🔥 Enviar strings (euros) para que el backend los convierta a céntimos
-      await startMonth({
-        incomeAmount: String(newIncome).trim(),
-        savingGoalAmount: String(newSaving).trim(),
-        weeklyBudgetAmount: String(newWeekly).trim(),
-      });
-
-      flashOk("Mes creado ✅");
-      setNewIncome("");
-      setNewSaving("");
-      setNewWeekly("");
-      await load();
-    } catch (e) {
-      setError(e?.message || "Error creando mes");
-    } finally {
-      setBusyId("");
-    }
-  }
+  const safetyEur = safety?.balance_eur ?? 0;
+  const piggyTwoEur = piggyTwoEuro?.balance_eur ?? 0;
+  const piggyNormalEur = piggyNormal?.balance_eur ?? 0;
 
   return (
     <>
       <Layout
-        title="Meses"
+        title="Home"
         rightSlot={
-          <button onClick={load} className="text-sm px-3 py-2 rounded-xl bg-white/10 border border-white/10">
+          <button
+            onClick={load}
+            className="text-sm px-3 py-2 rounded-xl bg-white/10 border border-white/10"
+          >
             Refresh
           </button>
         }
@@ -231,226 +248,239 @@ export default function Months() {
           </div>
         ) : null}
 
-        {ok ? (
-          <div className="mb-4 rounded-xl border border-green-500/30 bg-green-500/10 p-3 text-sm text-green-200">
-            {ok}
-          </div>
-        ) : null}
-
         {loading ? (
           <div className="text-white/60">Cargando…</div>
-        ) : (
+        ) : !month ? (
           <div className="space-y-4">
-            {/* ====== MES ACTIVO ====== */}
             <Card>
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-xs text-white/60">Mes activo</p>
-                  <p className="mt-1 text-xl font-semibold truncate">
-                    {openMonth ? monthLabel(openMonth.period_key) : "—"}
-                  </p>
-                  <p className="text-xs text-white/50 mt-1">
-                    {openMonth
-                      ? `Del ${formatDate(openMonth.start_date)} al ${formatDate(openMonth.end_date)}`
-                      : "No hay mes abierto"}
-                  </p>
-                </div>
-
-                <a href="/" className="text-sm px-3 py-2 rounded-xl bg-white/10 border border-white/10">
-                  Home
-                </a>
-              </div>
-
-              {openMonth ? (
-                <div className="mt-4 space-y-3">
-                  <div className="grid grid-cols-3 gap-2">
-                    <label className="block">
-                      <span className="text-[11px] text-white/60">Ingreso (€)</span>
-                      <input
-                        inputMode="decimal"
-                        className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-2"
-                        value={incomeAmount}
-                        onChange={(e) => setIncomeAmount(e.target.value)}
-                      />
-                    </label>
-
-                    <label className="block">
-                      <span className="text-[11px] text-white/60">Ahorro (€)</span>
-                      <input
-                        inputMode="decimal"
-                        className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-2"
-                        value={savingGoalAmount}
-                        onChange={(e) => setSavingGoalAmount(e.target.value)}
-                      />
-                    </label>
-
-                    <label className="block">
-                      <span className="text-[11px] text-white/60">Semana (€)</span>
-                      <input
-                        inputMode="decimal"
-                        className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-2"
-                        value={weeklyBudgetAmount}
-                        onChange={(e) => setWeeklyBudgetAmount(e.target.value)}
-                      />
-                    </label>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      onClick={onUpdateOpenMonth}
-                      disabled={busyId === openMonth.id}
-                      className={`rounded-2xl py-3 font-semibold ${
-                        busyId === openMonth.id
-                          ? "bg-white/10 text-white/40 border border-white/10"
-                          : "bg-white text-black"
-                      }`}
-                    >
-                      {busyId === openMonth.id ? "Guardando…" : "Guardar cambios"}
-                    </button>
-
-                    <button
-                      onClick={onCloseMonth}
-                      disabled={busyId === openMonth.id}
-                      className="rounded-2xl py-3 font-semibold bg-white/10 border border-white/10"
-                    >
-                      Cerrar mes
-                    </button>
-                  </div>
-
-                  <p className="text-xs text-white/50">
-                    Presupuesto semanal:{" "}
-                    <span className="font-semibold">{euro(getMonthAmountEur(openMonth, "weekly_budget_amount"))}</span>
-                    {" · "}
-                    Ahorro objetivo:{" "}
-                    <span className="font-semibold">{euro(getMonthAmountEur(openMonth, "saving_goal_amount"))}</span>
-                  </p>
-                </div>
-              ) : (
-                <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-3 space-y-3">
-                  <p className="text-sm font-semibold">Crear mes nuevo</p>
-
-                  <div className="grid grid-cols-3 gap-2">
-                    <label className="block">
-                      <span className="text-[11px] text-white/60">Ingreso (€)</span>
-                      <input
-                        inputMode="decimal"
-                        className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-2"
-                        value={newIncome}
-                        onChange={(e) => setNewIncome(e.target.value)}
-                        placeholder="2500"
-                      />
-                    </label>
-
-                    <label className="block">
-                      <span className="text-[11px] text-white/60">Ahorro (€)</span>
-                      <input
-                        inputMode="decimal"
-                        className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-2"
-                        value={newSaving}
-                        onChange={(e) => setNewSaving(e.target.value)}
-                        placeholder="400"
-                      />
-                    </label>
-
-                    <label className="block">
-                      <span className="text-[11px] text-white/60">Semana (€)</span>
-                      <input
-                        inputMode="decimal"
-                        className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-2"
-                        value={newWeekly}
-                        onChange={(e) => setNewWeekly(e.target.value)}
-                        placeholder="150"
-                      />
-                    </label>
-                  </div>
-
-                  <button
-                    onClick={onStartNewMonth}
-                    disabled={busyId === "NEW"}
-                    className={`w-full rounded-2xl py-3 font-semibold ${
-                      busyId === "NEW"
-                        ? "bg-white/10 text-white/40 border border-white/10"
-                        : "bg-white text-black"
-                    }`}
-                  >
-                    {busyId === "NEW" ? "Creando…" : "Empezar mes"}
-                  </button>
-                </div>
-              )}
+              <p className="text-white/60 text-sm">No hay mes abierto</p>
+              <p className="mt-1 text-lg font-semibold">
+                Inicia el mes para empezar a registrar gastos.
+              </p>
             </Card>
 
-            {/* ====== LISTA DE MESES ====== */}
-            <div className="rounded-2xl border border-white/10 bg-white/5 overflow-hidden">
-              <div className="px-4 py-3 border-b border-white/10 text-sm text-white/60">
-                Historial de meses
+            <Card>
+              <p className="text-sm font-semibold">Iniciar mes</p>
+
+              <div className="mt-3 space-y-3">
+                <label className="block">
+                  <span className="text-xs text-white/60">Ingreso del mes (€)</span>
+                  <input
+                    inputMode="decimal"
+                    className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-3"
+                    value={incomeAmount}
+                    onChange={(e) => setIncomeAmount(e.target.value)}
+                    placeholder="Ej: 2500"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="text-xs text-white/60">Ahorro objetivo (€)</span>
+                  <input
+                    inputMode="decimal"
+                    className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-3"
+                    value={savingGoalAmount}
+                    onChange={(e) => setSavingGoalAmount(e.target.value)}
+                    placeholder="Ej: 400"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="text-xs text-white/60">Presupuesto semanal (€)</span>
+                  <input
+                    inputMode="decimal"
+                    className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-3"
+                    value={weeklyBudgetAmount}
+                    onChange={(e) => setWeeklyBudgetAmount(e.target.value)}
+                    placeholder="Ej: 150"
+                  />
+                </label>
+
+                <button
+                  onClick={handleStartMonth}
+                  className="w-full rounded-2xl bg-white text-black py-3 font-semibold"
+                >
+                  Empezar mes
+                </button>
               </div>
+            </Card>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {/* ====== CABECERA MES ====== */}
+            <Card>
+              <p className="text-white/60 text-sm">Mes activo</p>
+              <p className="mt-1 text-2xl font-semibold">{monthLabel}</p>
+              <p className="text-xs text-white/60 mt-2">
+                Ingreso base: {euro(monthIncomeEur)} · Ahorro objetivo: {euro(monthSavingGoalEur)} · Semana:{" "}
+                {euro(monthWeeklyBudgetEur)}
+              </p>
+            </Card>
 
-              {rows.length === 0 ? (
-                <div className="p-4 text-white/60">No hay meses todavía.</div>
-              ) : (
-                <ul className="divide-y divide-white/10">
-                  {rows.map((m) => {
-                    const label = monthLabel(m.period_key);
-                    const isOpen = m.status === "OPEN";
+            {/* ====== KPI Semana/Mes ====== */}
+            <div className="grid grid-cols-2 gap-3">
+              <Card>
+                <p className="text-xs text-white/60">Queda esta semana</p>
+                <p className={`mt-2 text-2xl font-semibold ${remainingWeekEur < 0 ? "text-red-200" : ""}`}>
+                  {euro(remainingWeekEur)}
+                </p>
+                <p className="text-xs text-white/50 mt-1">Gastado: {euro(weekSpentEur)}</p>
+                <p className="text-[11px] text-white/40 mt-2">{weekRangeLabel}</p>
+              </Card>
 
-                    const incomeEur = getMonthAmountEur(m, "income_amount");
-                    const savingEur = getMonthAmountEur(m, "saving_goal_amount");
-                    const weeklyEur = getMonthAmountEur(m, "weekly_budget_amount");
-
-                    return (
-                      <li key={m.id} className="p-4 flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold truncate">
-                            {label}{" "}
-                            {isOpen ? (
-                              <span className="ml-2 text-[11px] px-2 py-1 rounded-full bg-green-500/15 border border-green-500/30 text-green-200">
-                                OPEN
-                              </span>
-                            ) : (
-                              <span className="ml-2 text-[11px] px-2 py-1 rounded-full bg-white/10 border border-white/10 text-white/60">
-                                CLOSED
-                              </span>
-                            )}
-                          </p>
-
-                          <p className="text-xs text-white/50 mt-1">
-                            {formatDate(m.start_date)} → {formatDate(m.end_date)}
-                          </p>
-
-                          <p className="text-xs text-white/50 mt-1">
-                            Ingreso {euro(incomeEur)} · Ahorro {euro(savingEur)} · Semana {euro(weeklyEur)}
-                          </p>
-                        </div>
-
-                        <div className="flex flex-col gap-2">
-                          <button
-                            onClick={() => onDeleteMonth(m.id, label)}
-                            disabled={busyId === m.id}
-                            className="px-3 py-2 rounded-xl bg-red-500/10 border border-red-500/30 text-red-200 text-sm font-semibold"
-                          >
-                            {busyId === m.id ? "Borrando…" : "Borrar"}
-                          </button>
-
-                          {isOpen ? (
-                            <button
-                              onClick={onCloseMonth}
-                              disabled={busyId === m.id}
-                              className="px-3 py-2 rounded-xl bg-white/10 border border-white/10 text-sm font-semibold"
-                            >
-                              Cerrar
-                            </button>
-                          ) : null}
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
+              <Card>
+                <p className="text-xs text-white/60">Queda este mes</p>
+                <p className={`mt-2 text-2xl font-semibold ${remainingMonthEur < 0 ? "text-red-200" : ""}`}>
+                  {euro(remainingMonthEur)}
+                </p>
+                <p className="text-xs text-white/50 mt-1">Gastos: {euro(totalExpensesEur)}</p>
+                <p className="text-xs text-white/50">Ingresos: {euro(totalIncomeEur)}</p>
+              </Card>
             </div>
 
-            <p className="text-xs text-white/40 px-1">
-              Borrar un mes elimina sus semanas y movimientos. Las huchas no se tocan.
-            </p>
+            {/* ====== RITMO ====== */}
+            <Card>
+              <p className="text-xs text-white/60">Ritmo diario recomendado</p>
+              <div className="mt-2 flex items-end justify-between gap-2">
+                <p className="text-2xl font-semibold">{euro(dailyPaceEur)}/día</p>
+                <p className="text-xs text-white/50">{totals?.daysLeft ?? 0} días restantes</p>
+              </div>
+              <p className="mt-2 text-xs text-white/50">
+                Si te mantienes cerca, llegas al final sin pasarte.
+              </p>
+            </Card>
+
+            {/* ====== QUIÉN PAGA ====== */}
+            <Card>
+              <p className="text-sm font-semibold">¿Quién está pagando qué?</p>
+              <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-xl bg-black/40 border border-white/10 p-3">
+                  <p className="text-xs text-white/60">Mío</p>
+                  <p className="mt-1 font-semibold">{euro(byAttrEur.MINE ?? 0)}</p>
+                </div>
+                <div className="rounded-xl bg-black/40 border border-white/10 p-3">
+                  <p className="text-xs text-white/60">Mi mujer</p>
+                  <p className="mt-1 font-semibold">{euro(byAttrEur.PARTNER ?? 0)}</p>
+                </div>
+                <div className="rounded-xl bg-black/40 border border-white/10 p-3">
+                  <p className="text-xs text-white/60">Casa</p>
+                  <p className="mt-1 font-semibold">{euro(byAttrEur.HOUSE ?? 0)}</p>
+                </div>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <a
+                  href="/add"
+                  className="rounded-2xl bg-white text-black text-center py-3 font-semibold"
+                >
+                  Añadir gasto
+                </a>
+                <a
+                  href="/movements"
+                  className="rounded-2xl bg-white/10 border border-white/10 text-center py-3 font-semibold"
+                >
+                  Movimientos
+                </a>
+              </div>
+            </Card>
+
+            {/* ====== INSIGHTS (solo EXPENSE) ====== */}
+            <Card>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-semibold">Insights (solo gastos)</p>
+                <p className="text-xs text-white/60">Total: {euro(insights.total)}</p>
+              </div>
+
+              <div className="mt-4">
+                <p className="text-xs text-white/60">Top categorías</p>
+                <div className="mt-2 space-y-3">
+                  {insights.topCategories.length === 0 ? (
+                    <p className="text-white/60 text-sm">Aún no hay gastos.</p>
+                  ) : (
+                    insights.topCategories.map((c) => (
+                      <div key={c.name} className="rounded-xl bg-black/40 border border-white/10 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-semibold truncate">{c.name}</p>
+                          <p className="text-sm">{euro(c.sum)}</p>
+                        </div>
+                        <ProgressBar value={c.sum} max={insights.total} />
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-5">
+                <p className="text-xs text-white/60">Top conceptos</p>
+                <div className="mt-2 space-y-2">
+                  {insights.topConcepts.length === 0 ? (
+                    <p className="text-white/60 text-sm">Aún no hay gastos.</p>
+                  ) : (
+                    insights.topConcepts.map((c) => (
+                      <div
+                        key={c.label}
+                        className="flex items-center justify-between gap-2 rounded-xl bg-black/40 border border-white/10 px-3 py-2"
+                      >
+                        <p className="text-sm font-medium truncate">{c.label}</p>
+                        <p className="text-sm">{euro(c.sum)}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <p className="mt-3 text-xs text-white/50">
+                Solo cuenta <span className="font-semibold">EXPENSE</span>.
+              </p>
+            </Card>
+
+            {/* ====== AHORROS / HUCHAS ====== */}
+            <Card>
+              <p className="text-sm font-semibold">Ahorros y huchas</p>
+
+              <div className="mt-3 grid grid-cols-1 gap-3">
+                <div className="rounded-xl bg-black/40 border border-white/10 p-3">
+                  <p className="text-xs text-white/60">Fondo de seguridad (banco)</p>
+                  <p className="mt-1 text-xl font-semibold">{euro(safetyEur)}</p>
+                  <p className="text-xs text-white/50 mt-1">
+                    Solo para imprevistos (y registrarlo en la app).
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-xl bg-black/40 border border-white/10 p-3">
+                    <p className="text-xs text-white/60">Hucha 2€</p>
+                    <p className="mt-1 text-lg font-semibold">{euro(piggyTwoEur)}</p>
+                    <p className="text-[11px] text-white/40 mt-1">
+                      {piggyTwoEuro?.entries_count ?? 0} entradas
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl bg-black/40 border border-white/10 p-3">
+                    <p className="text-xs text-white/60">Hucha normal</p>
+                    <p className="mt-1 text-lg font-semibold">{euro(piggyNormalEur)}</p>
+                    <p className="text-[11px] text-white/40 mt-1">
+                      {piggyNormal?.entries_count ?? 0} entradas
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <a
+                    href="/huchas"
+                    className="rounded-2xl bg-white/10 border border-white/10 text-center py-3 font-semibold"
+                  >
+                    Ver huchas
+                  </a>
+                  <a
+                    href="/imprevisto"
+                    className="rounded-2xl bg-white/10 border border-white/10 text-center py-3 font-semibold"
+                  >
+                    Imprevisto
+                  </a>
+                </div>
+              </div>
+            </Card>
           </div>
         )}
       </Layout>

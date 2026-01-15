@@ -4,9 +4,9 @@ import BottomNav from "../components/BottomNav";
 import { getCurrentMonth } from "../api/month";
 import { getCategories } from "../api/categories";
 import { createTransaction } from "../api/transactions";
+import { api } from "../api/client";
 
 function nowLocalDateTimeValue() {
-  // HTML datetime-local expects "YYYY-MM-DDTHH:mm"
   const d = new Date();
   const pad = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
@@ -16,36 +16,35 @@ function nowLocalDateTimeValue() {
 
 // Deja escribir con coma o punto, y limpia caracteres no permitidos
 function sanitizeMoneyTyping(value) {
-  // Permite: dígitos, coma, punto
   let v = String(value).replace(/[^\d.,]/g, "");
-
-  // Unifica separadores múltiples: si hay más de uno, dejamos solo el primero como decimal
   const parts = v.split(/[.,]/);
   if (parts.length > 2) {
-    v = parts[0] + "," + parts.slice(1).join(""); // dejamos coma como separador visual
+    v = parts[0] + "," + parts.slice(1).join("");
   }
-
   return v;
 }
 
-// Valida de forma segura sin depender de Number("3,50") (que rompe)
+// Valida: número > 0, máx 2 decimales
 function isValidMoneyInput(raw) {
   if (raw == null) return false;
   const s = String(raw).trim();
   if (!s) return false;
 
-  // Normaliza coma -> punto
   const normalized = s.replace(",", ".");
-
-  // Solo números con un separador decimal opcional
   if (!/^\d+(\.\d{0,2})?$/.test(normalized)) return false;
 
   const n = Number(normalized);
   return Number.isFinite(n) && n > 0;
 }
 
+// Week current (tu endpoint del backend)
+async function getCurrentWeek() {
+  return api("/week/current");
+}
+
 export default function AddExpense() {
   const [month, setMonth] = useState(null);
+  const [week, setWeek] = useState(null);
   const [categories, setCategories] = useState([]);
 
   const [amount, setAmount] = useState("");
@@ -59,13 +58,21 @@ export default function AddExpense() {
 
   useEffect(() => {
     async function load() {
+      setStatus({ loading: true, error: "", ok: "" });
       try {
-        const [m, cats] = await Promise.all([getCurrentMonth(), getCategories()]);
-        setMonth(m);
-        setCategories(cats);
-        setCategoryId(cats?.[0]?.id || "");
+        const [m, w, cats] = await Promise.all([
+          getCurrentMonth(),
+          getCurrentWeek(), // puede ser null si no hay mes
+          getCategories(),
+        ]);
+
+        setMonth(m || null);
+        setWeek(w || null);
+
+        setCategories(cats || []);
+        setCategoryId((cats || [])?.[0]?.id || "");
       } catch (e) {
-        setStatus((s) => ({ ...s, error: e.message || "Error cargando datos" }));
+        setStatus({ loading: false, error: e?.message || "Error cargando datos", ok: "" });
       } finally {
         setStatus((s) => ({ ...s, loading: false }));
       }
@@ -73,34 +80,57 @@ export default function AddExpense() {
     load();
   }, []);
 
+  // Si pago es CASH y no hay week, avisamos (aunque normalmente habrá)
+  const needsWeekForCash = useMemo(() => paymentMethod === "CASH", [paymentMethod]);
+
   const canSubmit = useMemo(() => {
-    return (
-      !!month?.id &&
-      !!categoryId &&
-      !!attribution &&
-      !!paymentMethod &&
-      !!dateTimeLocal &&
-      isValidMoneyInput(amount)
-    );
-  }, [month, amount, categoryId, attribution, paymentMethod, dateTimeLocal]);
+    if (!month?.id) return false;
+    if (!categoryId) return false;
+    if (!attribution) return false;
+    if (!paymentMethod) return false;
+    if (!dateTimeLocal) return false;
+    if (!isValidMoneyInput(amount)) return false;
+
+    // Si es efectivo, queremos week_id para que “semana cash” funcione perfecto
+    if (needsWeekForCash && !week?.id) return false;
+
+    return true;
+  }, [month, categoryId, attribution, paymentMethod, dateTimeLocal, amount, needsWeekForCash, week]);
 
   async function onSubmit() {
     setStatus({ loading: false, error: "", ok: "" });
 
-    // Validación extra (por si alguien fuerza el botón)
     if (!isValidMoneyInput(amount)) {
       setStatus({ loading: false, error: "Cantidad inválida (usa 3,50 o 3.50)", ok: "" });
       return;
     }
 
+    if (!month?.id) {
+      setStatus({ loading: false, error: "No hay mes abierto.", ok: "" });
+      return;
+    }
+
+    if (paymentMethod === "CASH" && !week?.id) {
+      setStatus({
+        loading: false,
+        error: "No se ha podido detectar la semana actual. Refresh y prueba de nuevo.",
+        ok: "",
+      });
+      return;
+    }
+
     try {
-      // Convert datetime-local to ISO
       const iso = new Date(dateTimeLocal).toISOString();
 
       await createTransaction({
         month_id: month.id,
-        // 🔥 Mandamos STRING para que el backend acepte coma/punto y convierta a céntimos
+
+        // ✅ SOLO si es CASH, asignamos week_id para la semana cash
+        week_id: paymentMethod === "CASH" ? week.id : null,
+
+        // 🔥 Mandamos STRING para coma/punto, backend -> cents
         amount: amount.trim(),
+
         type: "EXPENSE",
         direction: "OUT",
         category_id: categoryId,
@@ -115,7 +145,7 @@ export default function AddExpense() {
       setDateTimeLocal(nowLocalDateTimeValue());
       setStatus({ loading: false, error: "", ok: "Gasto guardado ✅" });
     } catch (e) {
-      setStatus({ loading: false, error: e.message || "Error guardando gasto", ok: "" });
+      setStatus({ loading: false, error: e?.message || "Error guardando gasto", ok: "" });
     }
   }
 
@@ -127,9 +157,7 @@ export default function AddExpense() {
         ) : !month ? (
           <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
             <p className="text-white/80">No hay mes abierto.</p>
-            <p className="text-white/60 text-sm mt-1">
-              Ve a Home y pulsa “Empezar mes”.
-            </p>
+            <p className="text-white/60 text-sm mt-1">Ve a Home y pulsa “Empezar mes”.</p>
           </div>
         ) : (
           <div className="space-y-4">
@@ -201,6 +229,17 @@ export default function AddExpense() {
                     <option value="CASH">Efectivo</option>
                     <option value="TRANSFER">Transferencia</option>
                   </select>
+
+                  {paymentMethod === "CASH" ? (
+                    <p className="mt-1 text-[11px] text-white/50">
+                      Efectivo usa el presupuesto semanal (se asigna a la semana actual).
+                      {!week?.id ? " ⚠️ No se detecta semana." : ""}
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-[11px] text-white/50">
+                      Tarjeta/transferencia va contra el banco (no consume presupuesto semanal).
+                    </p>
+                  )}
                 </label>
               </div>
 
@@ -228,9 +267,7 @@ export default function AddExpense() {
                 disabled={!canSubmit}
                 onClick={onSubmit}
                 className={`w-full rounded-2xl py-3 font-semibold ${
-                  canSubmit
-                    ? "bg-white text-black"
-                    : "bg-white/10 text-white/40 border border-white/10"
+                  canSubmit ? "bg-white text-black" : "bg-white/10 text-white/40 border border-white/10"
                 }`}
               >
                 Guardar gasto
@@ -238,6 +275,7 @@ export default function AddExpense() {
 
               <p className="text-xs text-white/50">
                 Mes activo: {month.period_key}
+                {week?.id ? ` · Semana actual: #${week.week_index}` : ""}
               </p>
             </div>
           </div>
