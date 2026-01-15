@@ -2,16 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import Layout from "../components/Layout";
 import BottomNav from "../components/BottomNav";
 
-import {
-  getMonths,
-  updateMonth,
-  closeMonth,
-  deleteMonth,
-  startMonth,
-} from "../api/month";
+import { getMonths, updateMonth, closeMonth, deleteMonth, startMonth } from "../api/month";
 
 function euro(n) {
-  return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(n);
+  const num = Number(n);
+  return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(
+    Number.isFinite(num) ? num : 0
+  );
 }
 
 function monthLabel(periodKey) {
@@ -34,6 +31,28 @@ function Card({ children }) {
   return <div className="rounded-2xl border border-white/10 bg-white/5 p-4">{children}</div>;
 }
 
+// ----- Helpers para trabajar SIEMPRE en euros en UI -----
+function getMonthAmountEur(m, key) {
+  // Preferimos el campo _eur si viene
+  const eurKey = `${key}_eur`; // income_amount_eur, saving_goal_amount_eur, weekly_budget_amount_eur
+  if (m && m[eurKey] !== undefined && m[eurKey] !== null) {
+    const n = Number(m[eurKey]);
+    return Number.isFinite(n) ? n : 0;
+  }
+  // fallback: si solo viene en céntimos
+  const cents = Number(m?.[key] ?? 0);
+  return Number.isFinite(cents) ? cents / 100 : 0;
+}
+
+function toInputEurString(n) {
+  // para inputs: 2500 / 400 / 150 / 1.60 etc.
+  const num = Number(n);
+  if (!Number.isFinite(num)) return "";
+  // quitamos trailing zeros para que no moleste: 1.00 -> 1, 1.50 -> 1.5
+  const s = String(num);
+  return s;
+}
+
 export default function Months() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -41,13 +60,13 @@ export default function Months() {
   const [error, setError] = useState("");
   const [ok, setOk] = useState("");
 
-  // Editor (para el mes OPEN)
+  // Editor (para el mes OPEN) -> inputs EN EUROS (string)
   const [editId, setEditId] = useState("");
   const [incomeAmount, setIncomeAmount] = useState("");
   const [savingGoalAmount, setSavingGoalAmount] = useState("");
   const [weeklyBudgetAmount, setWeeklyBudgetAmount] = useState("");
 
-  // Crear mes nuevo (cuando no hay OPEN)
+  // Crear mes nuevo -> inputs EN EUROS (string)
   const [newIncome, setNewIncome] = useState("");
   const [newSaving, setNewSaving] = useState("");
   const [newWeekly, setNewWeekly] = useState("");
@@ -62,7 +81,7 @@ export default function Months() {
       const m = await getMonths();
       setRows(m || []);
     } catch (e) {
-      setError(e.message);
+      setError(e?.message || "Error cargando meses");
     } finally {
       setLoading(false);
     }
@@ -72,13 +91,18 @@ export default function Months() {
     load();
   }, []);
 
-  // Cuando cambia el openMonth, precarga editor
+  // Precarga editor en € (no en céntimos)
   useEffect(() => {
     if (openMonth?.id) {
       setEditId(openMonth.id);
-      setIncomeAmount(String(openMonth.income_amount ?? ""));
-      setSavingGoalAmount(String(openMonth.saving_goal_amount ?? ""));
-      setWeeklyBudgetAmount(String(openMonth.weekly_budget_amount ?? ""));
+
+      const incomeEur = getMonthAmountEur(openMonth, "income_amount");
+      const savingEur = getMonthAmountEur(openMonth, "saving_goal_amount");
+      const weeklyEur = getMonthAmountEur(openMonth, "weekly_budget_amount");
+
+      setIncomeAmount(toInputEurString(incomeEur));
+      setSavingGoalAmount(toInputEurString(savingEur));
+      setWeeklyBudgetAmount(toInputEurString(weeklyEur));
     } else {
       setEditId("");
       setIncomeAmount("");
@@ -95,10 +119,11 @@ export default function Months() {
   async function onUpdateOpenMonth() {
     if (!editId) return;
 
+    // 🔥 IMPORTANTE: enviar strings para que el backend parsee "1,60" bien
     const payload = {};
-    if (incomeAmount !== "") payload.incomeAmount = Number(incomeAmount);
-    if (savingGoalAmount !== "") payload.savingGoalAmount = Number(savingGoalAmount);
-    if (weeklyBudgetAmount !== "") payload.weeklyBudgetAmount = Number(weeklyBudgetAmount);
+    if (incomeAmount !== "") payload.incomeAmount = String(incomeAmount).trim();
+    if (savingGoalAmount !== "") payload.savingGoalAmount = String(savingGoalAmount).trim();
+    if (weeklyBudgetAmount !== "") payload.weeklyBudgetAmount = String(weeklyBudgetAmount).trim();
 
     setBusyId(editId);
     setError("");
@@ -108,7 +133,7 @@ export default function Months() {
       flashOk("Mes actualizado ✅");
       await load();
     } catch (e) {
-      setError(e.message);
+      setError(e?.message || "Error actualizando mes");
     } finally {
       setBusyId("");
     }
@@ -129,7 +154,7 @@ export default function Months() {
       flashOk("Mes cerrado ✅");
       await load();
     } catch (e) {
-      setError(e.message);
+      setError(e?.message || "Error cerrando mes");
     } finally {
       setBusyId("");
     }
@@ -149,7 +174,7 @@ export default function Months() {
       flashOk("Mes borrado ✅");
       await load();
     } catch (e) {
-      setError(e.message);
+      setError(e?.message || "Error borrando mes");
     } finally {
       setBusyId("");
     }
@@ -171,18 +196,20 @@ export default function Months() {
 
     setBusyId("NEW");
     try {
+      // 🔥 Enviar strings (euros) para que el backend los convierta a céntimos
       await startMonth({
-        incomeAmount: Number(newIncome),
-        savingGoalAmount: Number(newSaving),
-        weeklyBudgetAmount: Number(newWeekly),
+        incomeAmount: String(newIncome).trim(),
+        savingGoalAmount: String(newSaving).trim(),
+        weeklyBudgetAmount: String(newWeekly).trim(),
       });
+
       flashOk("Mes creado ✅");
       setNewIncome("");
       setNewSaving("");
       setNewWeekly("");
       await load();
     } catch (e) {
-      setError(e.message);
+      setError(e?.message || "Error creando mes");
     } finally {
       setBusyId("");
     }
@@ -193,10 +220,7 @@ export default function Months() {
       <Layout
         title="Meses"
         rightSlot={
-          <button
-            onClick={load}
-            className="text-sm px-3 py-2 rounded-xl bg-white/10 border border-white/10"
-          >
+          <button onClick={load} className="text-sm px-3 py-2 rounded-xl bg-white/10 border border-white/10">
             Refresh
           </button>
         }
@@ -232,10 +256,7 @@ export default function Months() {
                   </p>
                 </div>
 
-                <a
-                  href="/"
-                  className="text-sm px-3 py-2 rounded-xl bg-white/10 border border-white/10"
-                >
+                <a href="/" className="text-sm px-3 py-2 rounded-xl bg-white/10 border border-white/10">
                   Home
                 </a>
               </div>
@@ -244,9 +265,9 @@ export default function Months() {
                 <div className="mt-4 space-y-3">
                   <div className="grid grid-cols-3 gap-2">
                     <label className="block">
-                      <span className="text-[11px] text-white/60">Ingreso</span>
+                      <span className="text-[11px] text-white/60">Ingreso (€)</span>
                       <input
-                        inputMode="numeric"
+                        inputMode="decimal"
                         className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-2"
                         value={incomeAmount}
                         onChange={(e) => setIncomeAmount(e.target.value)}
@@ -254,9 +275,9 @@ export default function Months() {
                     </label>
 
                     <label className="block">
-                      <span className="text-[11px] text-white/60">Ahorro</span>
+                      <span className="text-[11px] text-white/60">Ahorro (€)</span>
                       <input
-                        inputMode="numeric"
+                        inputMode="decimal"
                         className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-2"
                         value={savingGoalAmount}
                         onChange={(e) => setSavingGoalAmount(e.target.value)}
@@ -264,9 +285,9 @@ export default function Months() {
                     </label>
 
                     <label className="block">
-                      <span className="text-[11px] text-white/60">Semana</span>
+                      <span className="text-[11px] text-white/60">Semana (€)</span>
                       <input
-                        inputMode="numeric"
+                        inputMode="decimal"
                         className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-2"
                         value={weeklyBudgetAmount}
                         onChange={(e) => setWeeklyBudgetAmount(e.target.value)}
@@ -297,9 +318,11 @@ export default function Months() {
                   </div>
 
                   <p className="text-xs text-white/50">
-                    Presupuesto semanal: <span className="font-semibold">{euro(openMonth.weekly_budget_amount)}</span>
+                    Presupuesto semanal:{" "}
+                    <span className="font-semibold">{euro(getMonthAmountEur(openMonth, "weekly_budget_amount"))}</span>
                     {" · "}
-                    Ahorro objetivo: <span className="font-semibold">{euro(openMonth.saving_goal_amount)}</span>
+                    Ahorro objetivo:{" "}
+                    <span className="font-semibold">{euro(getMonthAmountEur(openMonth, "saving_goal_amount"))}</span>
                   </p>
                 </div>
               ) : (
@@ -308,9 +331,9 @@ export default function Months() {
 
                   <div className="grid grid-cols-3 gap-2">
                     <label className="block">
-                      <span className="text-[11px] text-white/60">Ingreso</span>
+                      <span className="text-[11px] text-white/60">Ingreso (€)</span>
                       <input
-                        inputMode="numeric"
+                        inputMode="decimal"
                         className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-2"
                         value={newIncome}
                         onChange={(e) => setNewIncome(e.target.value)}
@@ -319,9 +342,9 @@ export default function Months() {
                     </label>
 
                     <label className="block">
-                      <span className="text-[11px] text-white/60">Ahorro</span>
+                      <span className="text-[11px] text-white/60">Ahorro (€)</span>
                       <input
-                        inputMode="numeric"
+                        inputMode="decimal"
                         className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-2"
                         value={newSaving}
                         onChange={(e) => setNewSaving(e.target.value)}
@@ -330,9 +353,9 @@ export default function Months() {
                     </label>
 
                     <label className="block">
-                      <span className="text-[11px] text-white/60">Semana</span>
+                      <span className="text-[11px] text-white/60">Semana (€)</span>
                       <input
-                        inputMode="numeric"
+                        inputMode="decimal"
                         className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-2"
                         value={newWeekly}
                         onChange={(e) => setNewWeekly(e.target.value)}
@@ -345,7 +368,9 @@ export default function Months() {
                     onClick={onStartNewMonth}
                     disabled={busyId === "NEW"}
                     className={`w-full rounded-2xl py-3 font-semibold ${
-                      busyId === "NEW" ? "bg-white/10 text-white/40 border border-white/10" : "bg-white text-black"
+                      busyId === "NEW"
+                        ? "bg-white/10 text-white/40 border border-white/10"
+                        : "bg-white text-black"
                     }`}
                   >
                     {busyId === "NEW" ? "Creando…" : "Empezar mes"}
@@ -367,6 +392,11 @@ export default function Months() {
                   {rows.map((m) => {
                     const label = monthLabel(m.period_key);
                     const isOpen = m.status === "OPEN";
+
+                    const incomeEur = getMonthAmountEur(m, "income_amount");
+                    const savingEur = getMonthAmountEur(m, "saving_goal_amount");
+                    const weeklyEur = getMonthAmountEur(m, "weekly_budget_amount");
+
                     return (
                       <li key={m.id} className="p-4 flex items-start justify-between gap-3">
                         <div className="min-w-0">
@@ -382,12 +412,13 @@ export default function Months() {
                               </span>
                             )}
                           </p>
+
                           <p className="text-xs text-white/50 mt-1">
                             {formatDate(m.start_date)} → {formatDate(m.end_date)}
                           </p>
+
                           <p className="text-xs text-white/50 mt-1">
-                            Ingreso {euro(m.income_amount)} · Ahorro {euro(m.saving_goal_amount)} · Semana{" "}
-                            {euro(m.weekly_budget_amount)}
+                            Ingreso {euro(incomeEur)} · Ahorro {euro(savingEur)} · Semana {euro(weeklyEur)}
                           </p>
                         </div>
 
