@@ -358,25 +358,20 @@ const piggyNormalEur = centsToEurSafe(piggyNormal?.balance ?? 0);
                 </div>
               </div>
 
-              <div className="mt-3 grid grid-cols-3 gap-3">
-  <a
-    href="/add"
-    className="rounded-2xl bg-white text-black text-center py-3 font-semibold"
-  >
+              <div className="mt-3 grid grid-cols-4 gap-3">
+  <a href="/add" className="rounded-2xl bg-white text-black text-center py-3 font-semibold">
     Gasto
   </a>
 
-  <a
-    href="/add-income"
-    className="rounded-2xl bg-green-400 text-black text-center py-3 font-semibold"
-  >
+  <a href="/add-income" className="rounded-2xl bg-green-400 text-black text-center py-3 font-semibold">
     Ingreso
   </a>
 
-  <a
-    href="/movements"
-    className="rounded-2xl bg-white/10 border border-white/10 text-center py-3 font-semibold"
-  >
+  <a href="/close-week" className="rounded-2xl bg-white/10 border border-white/10 text-center py-3 font-semibold">
+    Cerrar semana
+  </a>
+
+  <a href="/movements" className="rounded-2xl bg-white/10 border border-white/10 text-center py-3 font-semibold">
     Movs
   </a>
 </div>

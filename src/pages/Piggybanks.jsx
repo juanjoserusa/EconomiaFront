@@ -148,7 +148,7 @@ export default function Piggybanks() {
 
                       <div className="text-right">
                         <p className="text-xs text-white/60">Saldo</p>
-                        <p className="mt-1 text-xl font-semibold">{euro(p.balance || 0)}</p>
+                        <p className="mt-1 text-xl font-semibold">{euro(p.balance_eur ?? 0)}</p>
                       </div>
                     </div>
 

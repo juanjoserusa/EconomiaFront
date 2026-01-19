@@ -8,6 +8,8 @@ import Emergency from "./pages/Emergency";
 import Savings from "./pages/Savings";
 import Months from "./pages/Months";
 import AddIncome from "./pages/AddIncome";
+import CloseWeek from "./pages/CloseWeek";
+
 
 
 
@@ -24,6 +26,7 @@ export default function App() {
         <Route path="/ahorro" element={<Savings />} />
         <Route path="/meses" element={<Months />} />
         <Route path="/add-income" element={<AddIncome />} />
+        <Route path="/close-week" element={<CloseWeek />} />
       </Routes>
     </BrowserRouter>
   );
