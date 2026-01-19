@@ -36,7 +36,6 @@ async function getSummaryCurrent() {
 }
 
 function isEnded(week) {
-  // week.end_date es DATE -> "YYYY-MM-DD"
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const end = new Date(week.end_date);
@@ -70,15 +69,22 @@ export default function CloseWeek() {
     setLoading(true);
     setError("");
     setOk("");
+
     try {
       const [w, s] = await Promise.all([getWeeks(), getSummaryCurrent()]);
-      const list = (w || []).filter((x) => x.status === "OPEN");
+
+      // ✅ mostramos TODAS (OPEN y CLOSED) para poder seleccionar semana anterior
+      const list = w || [];
       setWeeks(list);
       setSummary(s || null);
 
       // ✅ default: última OPEN que ya terminó
-      const ended = list.filter(isEnded);
-      const defaultWeek = ended.length ? ended[ended.length - 1] : list[list.length - 1] || null;
+      const endedOpen = list.filter((x) => x.status === "OPEN" && isEnded(x));
+      const defaultWeek =
+        (endedOpen.length ? endedOpen[endedOpen.length - 1] : null) ||
+        list.find((x) => x.status === "OPEN") ||
+        list[list.length - 1] ||
+        null;
 
       setSelectedWeekId(defaultWeek?.id || "");
       setPiggyTwoAmount("");
@@ -96,8 +102,6 @@ export default function CloseWeek() {
     load();
   }, []);
 
-  // Ojo: el bolsillo disponible que muestras en summary es “global del mes”.
-  // Para cerrar la semana concreta, el backend valida el bolsillo DE ESA SEMANA.
   const cashEurMonth = summary?.balances?.cash_eur ?? 0;
 
   const totalToMoveEur = useMemo(() => {
@@ -108,11 +112,15 @@ export default function CloseWeek() {
     );
   }, [piggyTwoAmount, piggyNormalAmount, returnToBankAmount]);
 
+  // ✅ SOLO permite cerrar una semana OPEN y terminada (no la vigente)
   const canClose = useMemo(() => {
     if (!selectedWeekId) return false;
+    if (!selectedWeek) return false;
+    if (selectedWeek.status !== "OPEN") return false;
+    if (!isEnded(selectedWeek)) return false;
     if (totalToMoveEur <= 0) return false;
     return true;
-  }, [selectedWeekId, totalToMoveEur]);
+  }, [selectedWeekId, selectedWeek, totalToMoveEur]);
 
   async function onSubmit() {
     if (!canClose) return;
@@ -141,6 +149,13 @@ export default function CloseWeek() {
     }
   }
 
+  const closeHint = useMemo(() => {
+    if (!selectedWeek) return "";
+    if (selectedWeek.status !== "OPEN") return "Esta semana ya está cerrada.";
+    if (!isEnded(selectedWeek)) return "No puedes cerrar la semana vigente. Espera a que termine.";
+    return "";
+  }, [selectedWeek]);
+
   return (
     <>
       <Layout
@@ -167,7 +182,7 @@ export default function CloseWeek() {
           <div className="text-white/60">Cargando…</div>
         ) : weeks.length === 0 ? (
           <Card>
-            <p className="text-white/80">No hay semanas OPEN.</p>
+            <p className="text-white/80">No hay semanas.</p>
             <p className="text-white/60 text-sm mt-1">Necesitas un mes abierto.</p>
           </Card>
         ) : (
@@ -184,23 +199,24 @@ export default function CloseWeek() {
                 >
                   {weeks.map((w) => (
                     <option key={w.id} value={w.id}>
-                      #{w.week_index} · {w.start_date} → {w.end_date} {isEnded(w) ? "(terminada)" : "(actual)"}
+                      #{w.week_index} · {w.start_date} → {w.end_date} · {w.status}{" "}
+                      {isEnded(w) ? "(terminada)" : "(vigente)"}
                     </option>
                   ))}
                 </select>
               </label>
 
-              <p className="mt-2 text-xs text-white/50">
-                Consejo: cierra una semana cuando ya terminó (lunes→domingo).
-              </p>
+              {closeHint ? (
+                <p className="mt-2 text-xs text-yellow-200/90">{closeHint}</p>
+              ) : (
+                <p className="mt-2 text-xs text-white/50">Cierra solo semanas que ya han terminado.</p>
+              )}
             </Card>
 
             <Card>
               <p className="text-sm font-semibold">Info rápida</p>
               <p className="text-xs text-white/60 mt-2">Bolsillo (mes): {euro(cashEurMonth)}</p>
-              <p className="text-xs text-white/50 mt-1">
-                El backend valida el bolsillo de la semana que cierres.
-              </p>
+              <p className="text-xs text-white/50 mt-1">El backend valida el bolsillo real de la semana cerrada.</p>
             </Card>
 
             <Card>
@@ -266,6 +282,13 @@ export default function CloseWeek() {
                 >
                   {saving ? "Cerrando…" : "Cerrar semana seleccionada"}
                 </button>
+
+                {!canClose && selectedWeek ? (
+                  <p className="text-xs text-white/50">
+                    Solo puedes cerrar semanas <span className="font-semibold">OPEN</span> y{" "}
+                    <span className="font-semibold">terminadas</span>.
+                  </p>
+                ) : null}
               </div>
             </Card>
           </div>

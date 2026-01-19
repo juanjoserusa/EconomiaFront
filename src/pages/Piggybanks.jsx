@@ -5,11 +5,21 @@ import { getCurrentMonth } from "../api/month";
 import { api } from "../api/client";
 
 function euro(n) {
-  return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(n);
+  const num = Number(n);
+  return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(
+    Number.isFinite(num) ? num : 0
+  );
 }
 
 function Card({ children }) {
   return <div className="rounded-2xl border border-white/10 bg-white/5 p-4">{children}</div>;
+}
+
+function sanitizeMoneyTyping(value) {
+  let v = String(value).replace(/[^\d.,]/g, "");
+  const parts = v.split(/[.,]/);
+  if (parts.length > 2) v = parts[0] + "," + parts.slice(1).join("");
+  return v;
 }
 
 function isValidMoneyInput(raw) {
@@ -21,7 +31,6 @@ function isValidMoneyInput(raw) {
   const n = Number(normalized);
   return Number.isFinite(n) && n > 0;
 }
-
 
 async function getPiggybanksSummary() {
   return api("/piggybanks/summary");
@@ -37,6 +46,7 @@ async function createPiggyEntry(piggyId, payload) {
 export default function Piggybanks() {
   const [month, setMonth] = useState(null);
   const [items, setItems] = useState([]);
+
   const [openForm, setOpenForm] = useState(null); // piggyId abierto
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
@@ -57,7 +67,7 @@ export default function Piggybanks() {
       const rows = await getPiggybanksSummary();
       setItems(rows || []);
     } catch (e) {
-      setError(e.message);
+      setError(e?.message || "Error cargando huchas");
     } finally {
       setLoading(false);
     }
@@ -67,9 +77,9 @@ export default function Piggybanks() {
     load();
   }, []);
 
-const canSave = useMemo(() => {
-  return isValidMoneyInput(amount) && openForm;
-}, [amount, openForm]);
+  const canSave = useMemo(() => {
+    return !!openForm && isValidMoneyInput(amount);
+  }, [amount, openForm]);
 
   function resetForm() {
     setAmount("");
@@ -79,22 +89,24 @@ const canSave = useMemo(() => {
 
   async function onSave(piggyId) {
     if (!canSave) return;
+
     setSaving(true);
     setError("");
     setOk("");
+
     try {
-      // month_id opcional (si hay mes abierto lo asociamos)
       await createPiggyEntry(piggyId, {
-  amount: String(amount).trim(),   // ✅
-  note: note.trim() ? note.trim() : null,
-  month_id: month?.id || null,
-});
+        // ✅ IMPORTANTÍSIMO: string, para que parseMoneyToCents soporte "36,8"
+        amount: String(amount).trim(),
+        note: note.trim() ? note.trim() : null,
+        month_id: month?.id || null,
+      });
 
       setOk("Añadido ✅");
       resetForm();
       await load();
     } catch (e) {
-      setError(e.message);
+      setError(e?.message || "Error guardando en hucha");
     } finally {
       setSaving(false);
       setTimeout(() => setOk(""), 1200);
@@ -106,10 +118,7 @@ const canSave = useMemo(() => {
       <Layout
         title="Huchas"
         rightSlot={
-          <a
-            href="/"
-            className="text-sm px-3 py-2 rounded-xl bg-white/10 border border-white/10"
-          >
+          <a href="/" className="text-sm px-3 py-2 rounded-xl bg-white/10 border border-white/10">
             Volver
           </a>
         }
@@ -152,12 +161,15 @@ const canSave = useMemo(() => {
                         <p className="mt-1 text-lg font-semibold truncate">{p.name}</p>
                         <p className="text-xs text-white/50 mt-1">
                           Entradas: {p.entries_count}{" "}
-                          {p.last_entry_at ? `· Última: ${new Date(p.last_entry_at).toLocaleString("es-ES")}` : ""}
+                          {p.last_entry_at
+                            ? `· Última: ${new Date(p.last_entry_at).toLocaleString("es-ES")}`
+                            : ""}
                         </p>
                       </div>
 
                       <div className="text-right">
                         <p className="text-xs text-white/60">Saldo</p>
+                        {/* ✅ SIEMPRE balance_eur (euros), NO balance (céntimos) */}
                         <p className="mt-1 text-xl font-semibold">{euro(p.balance_eur ?? 0)}</p>
                       </div>
                     </div>
@@ -195,9 +207,14 @@ const canSave = useMemo(() => {
                             inputMode="decimal"
                             className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-3 text-lg"
                             value={amount}
-                            onChange={(e) => setAmount(e.target.value)}
-                            placeholder="Ej: 20"
+                            onChange={(e) => setAmount(sanitizeMoneyTyping(e.target.value))}
+                            placeholder="Ej: 20 o 36,8"
                           />
+                          {!isValidMoneyInput(amount) && amount.trim() ? (
+                            <p className="mt-1 text-xs text-red-200/80">
+                              Formato inválido. Usa por ejemplo 3,50 o 3.50 (máx 2 decimales).
+                            </p>
+                          ) : null}
                         </label>
 
                         <label className="block">
@@ -222,9 +239,7 @@ const canSave = useMemo(() => {
                           {saving ? "Guardando…" : "Guardar"}
                         </button>
 
-                        <p className="text-xs text-white/50">
-                          Se registra con fecha/hora actual.
-                        </p>
+                        <p className="text-xs text-white/50">Se registra con fecha/hora actual.</p>
                       </div>
                     ) : null}
                   </Card>
