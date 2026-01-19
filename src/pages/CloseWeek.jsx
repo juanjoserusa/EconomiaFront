@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import Layout from "../components/Layout";
 import BottomNav from "../components/BottomNav";
 import { api } from "../api/client";
-import { getCurrentWeek, closeWeek } from "../api/weeks";
+import { getWeeks, closeWeek } from "../api/weeks";
 
 function Card({ children }) {
   return <div className="rounded-2xl border border-white/10 bg-white/5 p-4">{children}</div>;
@@ -15,7 +15,6 @@ function euro(n) {
   );
 }
 
-// deja escribir: dígitos, coma, punto
 function sanitizeMoneyTyping(value) {
   let v = String(value).replace(/[^\d.,]/g, "");
   const parts = v.split(/[.,]/);
@@ -36,6 +35,15 @@ async function getSummaryCurrent() {
   return api("/summary/current");
 }
 
+function isEnded(week) {
+  // week.end_date es DATE -> "YYYY-MM-DD"
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const end = new Date(week.end_date);
+  end.setHours(0, 0, 0, 0);
+  return end < today;
+}
+
 export default function CloseWeek() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -43,25 +51,36 @@ export default function CloseWeek() {
   const [error, setError] = useState("");
   const [ok, setOk] = useState("");
 
-  const [week, setWeek] = useState(null);
+  const [weeks, setWeeks] = useState([]);
+  const [selectedWeekId, setSelectedWeekId] = useState("");
+
   const [summary, setSummary] = useState(null);
 
-  // inputs
   const [piggyTwoAmount, setPiggyTwoAmount] = useState("");
   const [piggyNormalAmount, setPiggyNormalAmount] = useState("");
   const [returnToBankAmount, setReturnToBankAmount] = useState("");
   const [note, setNote] = useState("");
+
+  const selectedWeek = useMemo(
+    () => weeks.find((w) => w.id === selectedWeekId) || null,
+    [weeks, selectedWeekId]
+  );
 
   async function load() {
     setLoading(true);
     setError("");
     setOk("");
     try {
-      const [w, s] = await Promise.all([getCurrentWeek(), getSummaryCurrent()]);
-      setWeek(w || null);
+      const [w, s] = await Promise.all([getWeeks(), getSummaryCurrent()]);
+      const list = (w || []).filter((x) => x.status === "OPEN");
+      setWeeks(list);
       setSummary(s || null);
 
-      // reset inputs
+      // ✅ default: última OPEN que ya terminó
+      const ended = list.filter(isEnded);
+      const defaultWeek = ended.length ? ended[ended.length - 1] : list[list.length - 1] || null;
+
+      setSelectedWeekId(defaultWeek?.id || "");
       setPiggyTwoAmount("");
       setPiggyNormalAmount("");
       setReturnToBankAmount("");
@@ -77,7 +96,9 @@ export default function CloseWeek() {
     load();
   }, []);
 
-  const cashEur = summary?.balances?.cash_eur ?? 0;
+  // Ojo: el bolsillo disponible que muestras en summary es “global del mes”.
+  // Para cerrar la semana concreta, el backend valida el bolsillo DE ESA SEMANA.
+  const cashEurMonth = summary?.balances?.cash_eur ?? 0;
 
   const totalToMoveEur = useMemo(() => {
     return (
@@ -88,12 +109,10 @@ export default function CloseWeek() {
   }, [piggyTwoAmount, piggyNormalAmount, returnToBankAmount]);
 
   const canClose = useMemo(() => {
-    if (!week?.id) return false;
+    if (!selectedWeekId) return false;
     if (totalToMoveEur <= 0) return false;
-    // no pasarte del bolsillo
-    if (totalToMoveEur - cashEur > 1e-9) return false;
     return true;
-  }, [week?.id, totalToMoveEur, cashEur]);
+  }, [selectedWeekId, totalToMoveEur]);
 
   async function onSubmit() {
     if (!canClose) return;
@@ -103,7 +122,6 @@ export default function CloseWeek() {
     setOk("");
 
     try {
-      // IMPORTANTÍSIMO: mandar strings tal cual para que backend acepte coma/punto
       const payload = {
         piggyTwoAmount: String(piggyTwoAmount || "0").trim(),
         piggyNormalAmount: String(piggyNormalAmount || "0").trim(),
@@ -111,11 +129,9 @@ export default function CloseWeek() {
         note: note.trim() ? note.trim() : null,
       };
 
-      const r = await closeWeek(week.id, payload);
+      const r = await closeWeek(selectedWeekId, payload);
 
-      setOk(
-        `Semana cerrada ✅ · Total movido: ${euro(r?.moved?.total_eur ?? totalToMoveEur)}`
-      );
+      setOk(`Semana cerrada ✅ · Total movido: ${euro(r?.moved?.total_eur ?? totalToMoveEur)}`);
       await load();
     } catch (e) {
       setError(e?.message || "Error cerrando semana");
@@ -149,28 +165,41 @@ export default function CloseWeek() {
 
         {loading ? (
           <div className="text-white/60">Cargando…</div>
-        ) : !week ? (
+        ) : weeks.length === 0 ? (
           <Card>
-            <p className="text-white/80">No hay semana activa.</p>
+            <p className="text-white/80">No hay semanas OPEN.</p>
             <p className="text-white/60 text-sm mt-1">Necesitas un mes abierto.</p>
           </Card>
         ) : (
           <div className="space-y-4">
             <Card>
-              <p className="text-white/60 text-sm">Semana actual</p>
-              <p className="mt-1 text-lg font-semibold">
-                {week.start_date} → {week.end_date}
-              </p>
-              <p className="text-xs text-white/50 mt-1">
-                Presupuesto retirado: {euro(week.cash_withdraw_amount_eur ?? 0)}
+              <p className="text-sm font-semibold">Elige qué semana cerrar</p>
+
+              <label className="block mt-3">
+                <span className="text-xs text-white/60">Semana</span>
+                <select
+                  className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-3"
+                  value={selectedWeekId}
+                  onChange={(e) => setSelectedWeekId(e.target.value)}
+                >
+                  {weeks.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      #{w.week_index} · {w.start_date} → {w.end_date} {isEnded(w) ? "(terminada)" : "(actual)"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <p className="mt-2 text-xs text-white/50">
+                Consejo: cierra una semana cuando ya terminó (lunes→domingo).
               </p>
             </Card>
 
             <Card>
-              <p className="text-sm font-semibold">Bolsillo disponible</p>
-              <p className="mt-2 text-2xl font-semibold">{euro(cashEur)}</p>
-              <p className="text-xs text-white/50 mt-2">
-                Aquí estás repartiendo el efectivo sobrante (no es “gasto” normal).
+              <p className="text-sm font-semibold">Info rápida</p>
+              <p className="text-xs text-white/60 mt-2">Bolsillo (mes): {euro(cashEurMonth)}</p>
+              <p className="text-xs text-white/50 mt-1">
+                El backend valida el bolsillo de la semana que cierres.
               </p>
             </Card>
 
@@ -217,18 +246,13 @@ export default function CloseWeek() {
                     className="mt-1 w-full rounded-xl bg-black/40 border border-white/10 px-3 py-3"
                     value={note}
                     onChange={(e) => setNote(e.target.value)}
-                    placeholder="Ej: sobrante semana"
+                    placeholder="Ej: cierre semana"
                   />
                 </label>
 
                 <div className="rounded-xl bg-black/30 border border-white/10 p-3">
                   <p className="text-xs text-white/60">Total a mover</p>
                   <p className="mt-1 text-xl font-semibold">{euro(totalToMoveEur)}</p>
-                  {totalToMoveEur > cashEur ? (
-                    <p className="mt-1 text-xs text-red-200/80">
-                      Te estás pasando del bolsillo disponible ({euro(cashEur)}).
-                    </p>
-                  ) : null}
                 </div>
 
                 <button
@@ -240,12 +264,8 @@ export default function CloseWeek() {
                       : "bg-white/10 text-white/40 border border-white/10"
                   }`}
                 >
-                  {saving ? "Cerrando…" : "Cerrar semana"}
+                  {saving ? "Cerrando…" : "Cerrar semana seleccionada"}
                 </button>
-
-                <p className="text-xs text-white/50">
-                  Esto repartirá el sobrante sin afectar a tus gastos normales.
-                </p>
               </div>
             </Card>
           </div>

@@ -12,6 +12,17 @@ function Card({ children }) {
   return <div className="rounded-2xl border border-white/10 bg-white/5 p-4">{children}</div>;
 }
 
+function isValidMoneyInput(raw) {
+  if (raw == null) return false;
+  const s = String(raw).trim();
+  if (!s) return false;
+  const normalized = s.replace(",", ".");
+  if (!/^\d+(\.\d{0,2})?$/.test(normalized)) return false;
+  const n = Number(normalized);
+  return Number.isFinite(n) && n > 0;
+}
+
+
 async function getPiggybanksSummary() {
   return api("/piggybanks/summary");
 }
@@ -56,10 +67,9 @@ export default function Piggybanks() {
     load();
   }, []);
 
-  const canSave = useMemo(() => {
-    const n = Number(amount);
-    return Number.isFinite(n) && n > 0 && openForm;
-  }, [amount, openForm]);
+const canSave = useMemo(() => {
+  return isValidMoneyInput(amount) && openForm;
+}, [amount, openForm]);
 
   function resetForm() {
     setAmount("");
@@ -75,10 +85,10 @@ export default function Piggybanks() {
     try {
       // month_id opcional (si hay mes abierto lo asociamos)
       await createPiggyEntry(piggyId, {
-        amount: Number(amount),
-        note: note.trim() ? note.trim() : null,
-        month_id: month?.id || null,
-      });
+  amount: String(amount).trim(),   // ✅
+  note: note.trim() ? note.trim() : null,
+  month_id: month?.id || null,
+});
 
       setOk("Añadido ✅");
       resetForm();
