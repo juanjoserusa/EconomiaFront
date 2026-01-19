@@ -36,11 +36,18 @@ async function getSummaryCurrent() {
 }
 
 function isEnded(week) {
+  // week.end_date = "YYYY-MM-DD"
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+
   const end = new Date(week.end_date);
   end.setHours(0, 0, 0, 0);
+
   return end < today;
+}
+
+function weekLabel(w) {
+  return `#${w.week_index} · ${w.start_date} → ${w.end_date}`;
 }
 
 export default function CloseWeek() {
@@ -65,6 +72,27 @@ export default function CloseWeek() {
     [weeks, selectedWeekId]
   );
 
+  const sortedWeeks = useMemo(() => {
+    // ✅ orden estable: por week_index asc
+    const list = [...(weeks || [])];
+    list.sort((a, b) => (a.week_index || 0) - (b.week_index || 0));
+    return list;
+  }, [weeks]);
+
+  const closableWeeks = useMemo(() => {
+    // ✅ solo OPEN y terminadas
+    return sortedWeeks.filter((w) => w.status === "OPEN" && isEnded(w));
+  }, [sortedWeeks]);
+
+  const openCurrentWeeks = useMemo(() => {
+    // OPEN pero vigente (no cerrable)
+    return sortedWeeks.filter((w) => w.status === "OPEN" && !isEnded(w));
+  }, [sortedWeeks]);
+
+  const closedWeeks = useMemo(() => {
+    return sortedWeeks.filter((w) => w.status === "CLOSED");
+  }, [sortedWeeks]);
+
   async function load() {
     setLoading(true);
     setError("");
@@ -72,21 +100,22 @@ export default function CloseWeek() {
 
     try {
       const [w, s] = await Promise.all([getWeeks(), getSummaryCurrent()]);
-
-      // ✅ mostramos TODAS (OPEN y CLOSED) para poder seleccionar semana anterior
-      const list = w || [];
+      const list = Array.isArray(w) ? w : [];
       setWeeks(list);
       setSummary(s || null);
 
-      // ✅ default: última OPEN que ya terminó
-      const endedOpen = list.filter((x) => x.status === "OPEN" && isEnded(x));
+      // ✅ default: última semana CERRABLE (OPEN + terminada).
+      // si no hay, cae a la OPEN vigente; si no, la última.
+      const sorted = [...list].sort((a, b) => (a.week_index || 0) - (b.week_index || 0));
+      const closables = sorted.filter((x) => x.status === "OPEN" && isEnded(x));
       const defaultWeek =
-        (endedOpen.length ? endedOpen[endedOpen.length - 1] : null) ||
-        list.find((x) => x.status === "OPEN") ||
-        list[list.length - 1] ||
+        (closables.length ? closables[closables.length - 1] : null) ||
+        sorted.find((x) => x.status === "OPEN") ||
+        sorted[sorted.length - 1] ||
         null;
 
       setSelectedWeekId(defaultWeek?.id || "");
+
       setPiggyTwoAmount("");
       setPiggyNormalAmount("");
       setReturnToBankAmount("");
@@ -114,13 +143,12 @@ export default function CloseWeek() {
 
   // ✅ SOLO permite cerrar una semana OPEN y terminada (no la vigente)
   const canClose = useMemo(() => {
-    if (!selectedWeekId) return false;
     if (!selectedWeek) return false;
     if (selectedWeek.status !== "OPEN") return false;
     if (!isEnded(selectedWeek)) return false;
     if (totalToMoveEur <= 0) return false;
     return true;
-  }, [selectedWeekId, selectedWeek, totalToMoveEur]);
+  }, [selectedWeek, totalToMoveEur]);
 
   async function onSubmit() {
     if (!canClose) return;
@@ -137,7 +165,7 @@ export default function CloseWeek() {
         note: note.trim() ? note.trim() : null,
       };
 
-      const r = await closeWeek(selectedWeekId, payload);
+      const r = await closeWeek(selectedWeek.id, payload);
 
       setOk(`Semana cerrada ✅ · Total movido: ${euro(r?.moved?.total_eur ?? totalToMoveEur)}`);
       await load();
@@ -151,10 +179,11 @@ export default function CloseWeek() {
 
   const closeHint = useMemo(() => {
     if (!selectedWeek) return "";
-    if (selectedWeek.status !== "OPEN") return "Esta semana ya está cerrada.";
-    if (!isEnded(selectedWeek)) return "No puedes cerrar la semana vigente. Espera a que termine.";
+    if (selectedWeek.status !== "OPEN") return "Esta semana ya está CERRADA.";
+    if (!isEnded(selectedWeek)) return "No puedes cerrar la semana vigente. Debe estar terminada (domingo).";
+    if (totalToMoveEur <= 0) return "Mete un importe para repartir el sobrante.";
     return "";
-  }, [selectedWeek]);
+  }, [selectedWeek, totalToMoveEur]);
 
   return (
     <>
@@ -197,19 +226,42 @@ export default function CloseWeek() {
                   value={selectedWeekId}
                   onChange={(e) => setSelectedWeekId(e.target.value)}
                 >
-                  {weeks.map((w) => (
-                    <option key={w.id} value={w.id}>
-                      #{w.week_index} · {w.start_date} → {w.end_date} · {w.status}{" "}
-                      {isEnded(w) ? "(terminada)" : "(vigente)"}
-                    </option>
-                  ))}
+                  {closableWeeks.length ? (
+                    <optgroup label="✅ Cerrables (OPEN + terminada)">
+                      {closableWeeks.map((w) => (
+                        <option key={w.id} value={w.id}>
+                          {weekLabel(w)} · OPEN (terminada)
+                        </option>
+                      ))}
+                    </optgroup>
+                  ) : null}
+
+                  {openCurrentWeeks.length ? (
+                    <optgroup label="🟡 Vigente (OPEN, no cerrable)">
+                      {openCurrentWeeks.map((w) => (
+                        <option key={w.id} value={w.id}>
+                          {weekLabel(w)} · OPEN (vigente)
+                        </option>
+                      ))}
+                    </optgroup>
+                  ) : null}
+
+                  {closedWeeks.length ? (
+                    <optgroup label="⚪ Cerradas (CLOSED)">
+                      {closedWeeks.map((w) => (
+                        <option key={w.id} value={w.id}>
+                          {weekLabel(w)} · CLOSED
+                        </option>
+                      ))}
+                    </optgroup>
+                  ) : null}
                 </select>
               </label>
 
               {closeHint ? (
                 <p className="mt-2 text-xs text-yellow-200/90">{closeHint}</p>
               ) : (
-                <p className="mt-2 text-xs text-white/50">Cierra solo semanas que ya han terminado.</p>
+                <p className="mt-2 text-xs text-white/50">Solo se pueden cerrar semanas OPEN y terminadas.</p>
               )}
             </Card>
 
@@ -285,8 +337,8 @@ export default function CloseWeek() {
 
                 {!canClose && selectedWeek ? (
                   <p className="text-xs text-white/50">
-                    Solo puedes cerrar semanas <span className="font-semibold">OPEN</span> y{" "}
-                    <span className="font-semibold">terminadas</span>.
+                    Selecciona una semana <span className="font-semibold">OPEN</span> y{" "}
+                    <span className="font-semibold">terminada</span>.
                   </p>
                 ) : null}
               </div>

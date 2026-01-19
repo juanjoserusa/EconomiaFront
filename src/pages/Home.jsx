@@ -142,13 +142,9 @@ export default function Home() {
   const totals = summary?.totals || null;
   const week = summary?.week || null;
 
-  // ✅ NUEVO: balances bank/cash desde backend
   const balances = summary?.balances || null;
   const bankEur = balances?.bank_eur ?? 0;
   const cashEur = balances?.cash_eur ?? 0;
-  const bankOutEur = balances?.bank_out_eur ?? 0;
-  const cashOutEur = balances?.cash_out_eur ?? 0;
-  const cashInEur = balances?.cash_in_eur ?? 0;
 
   const remainingWeekEur = totals?.remainingWeek_eur ?? 0;
   const weekSpentEur = totals?.weekSpent_eur ?? 0;
@@ -202,14 +198,10 @@ export default function Home() {
   const piggyNormal = useMemo(() => piggySummary.find((p) => p.type === "NORMAL"), [piggySummary]);
 
   const safetyEur = safety?.balance_eur ?? 0;
-function centsToEurSafe(cents) {
-  const n = Number(cents);
-  return Number.isFinite(n) ? n  : 0;
-}
 
-// ✅ SIEMPRE desde balance (céntimos). balance_eur lo ignoramos.
-const piggyTwoEur = centsToEurSafe(piggyTwoEuro?.balance ?? 0);
-const piggyNormalEur = centsToEurSafe(piggyNormal?.balance ?? 0);
+  // ✅ FIX: SIEMPRE usar balance_eur (euros ya calculados por backend)
+  const piggyTwoEur = Number(piggyTwoEuro?.balance_eur ?? 0) || 0;
+  const piggyNormalEur = Number(piggyNormal?.balance_eur ?? 0) || 0;
 
   return (
     <>
@@ -231,6 +223,7 @@ const piggyNormalEur = centsToEurSafe(piggyNormal?.balance ?? 0);
           <div className="text-white/60">Cargando…</div>
         ) : !month ? (
           <div className="space-y-4">
+            {/* ... igual que tu código ... */}
             <Card>
               <p className="text-white/60 text-sm">No hay mes abierto</p>
               <p className="mt-1 text-lg font-semibold">Inicia el mes para empezar a registrar gastos.</p>
@@ -281,150 +274,7 @@ const piggyNormalEur = centsToEurSafe(piggyNormal?.balance ?? 0);
           </div>
         ) : (
           <div className="space-y-4">
-            <Card>
-              <p className="text-white/60 text-sm">Mes activo</p>
-              <p className="mt-1 text-2xl font-semibold">{monthLabel}</p>
-              <p className="text-xs text-white/60 mt-2">
-                Ingreso base: {euro(monthIncomeEur)} · Ahorro objetivo: {euro(monthSavingGoalEur)} · Semana:{" "}
-                {euro(monthWeeklyBudgetEur)}
-              </p>
-            </Card>
-
-            {/* ✅ NUEVO: Banco / Bolsillo */}
-            <Card>
-              <p className="text-sm font-semibold">Banco y bolsillo</p>
-
-              <div className="mt-3 grid grid-cols-2 gap-3 justify-between text-center">
-                <div className="rounded-xl bg-black/40 border border-white/10 p-3">
-                  <p className="text-xs text-white/60">Banco (saldo)</p>
-                  <p className="mt-1 text-xl font-semibold">{euro(bankEur)}</p>
-                </div>
-
-                <div className="rounded-xl bg-black/40 border border-white/10 p-3">
-                  <p className="text-xs text-white/60">Bolsillo (saldo)</p>
-                  <p className="mt-1 text-xl font-semibold">{euro(cashEur)}</p>
-                  
-                </div>
-              </div>
-
-              <p className="mt-2 text-[11px] text-white/50">
-                Tarjeta/transferencia resta del banco. Efectivo resta del bolsillo. La retirada semanal mueve banco → bolsillo.
-              </p>
-            </Card>
-
-            <div className="grid grid-cols-2 gap-3">
-              <Card>
-                <p className="text-xs text-white/60">Queda esta semana</p>
-                <p className={`mt-2 text-2xl font-semibold ${remainingWeekEur < 0 ? "text-red-200" : ""}`}>
-                  {euro(remainingWeekEur)}
-                </p>
-                <p className="text-xs text-white/50 mt-1">Gastado: {euro(weekSpentEur)}</p>
-                <p className="text-[11px] text-white/40 mt-2">{weekRangeLabel}</p>
-              </Card>
-
-              <Card>
-                <p className="text-xs text-white/60">Queda este mes</p>
-                <p className={`mt-2 text-2xl font-semibold ${remainingMonthEur < 0 ? "text-red-200" : ""}`}>
-                  {euro(remainingMonthEur)}
-                </p>
-                <p className="text-xs text-white/50 mt-1">Gastos: {euro(totalExpensesEur)}</p>
-                <p className="text-xs text-white/50">Ingresos: {euro(totalIncomeEur)}</p>
-              </Card>
-            </div>
-
-            <Card>
-              <p className="text-xs text-white/60">Ritmo diario recomendado</p>
-              <div className="mt-2 flex items-end justify-between gap-2">
-                <p className="text-2xl font-semibold">{euro(dailyPaceEur)}/día</p>
-                <p className="text-xs text-white/50">{totals?.daysLeft ?? 0} días restantes</p>
-              </div>
-              <p className="mt-2 text-xs text-white/50">Si te mantienes cerca, llegas al final sin pasarte.</p>
-            </Card>
-
-            <Card>
-              <p className="text-sm font-semibold">¿Quién está pagando qué?</p>
-              <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-                <div className="rounded-xl bg-black/40 border border-white/10 p-3">
-                  <p className="text-xs text-white/60">Mío</p>
-                  <p className="mt-1 font-semibold">{euro(byAttrEur.MINE ?? 0)}</p>
-                </div>
-                <div className="rounded-xl bg-black/40 border border-white/10 p-3">
-                  <p className="text-xs text-white/60">Mi mujer</p>
-                  <p className="mt-1 font-semibold">{euro(byAttrEur.PARTNER ?? 0)}</p>
-                </div>
-                <div className="rounded-xl bg-black/40 border border-white/10 p-3">
-                  <p className="text-xs text-white/60">Casa</p>
-                  <p className="mt-1 font-semibold">{euro(byAttrEur.HOUSE ?? 0)}</p>
-                </div>
-              </div>
-
-              <div className="mt-3 grid grid-cols-4 gap-3">
-  <a href="/add" className="rounded-2xl bg-white text-black text-center py-3 font-semibold">
-    Gasto
-  </a>
-
-  <a href="/add-income" className="rounded-2xl bg-green-400 text-black text-center py-3 font-semibold">
-    Ingreso
-  </a>
-
-  <a href="/close-week" className="rounded-2xl bg-white/10 border border-white/10 text-center py-3 font-semibold">
-    Cerrar semana
-  </a>
-
-  <a href="/movements" className="rounded-2xl bg-white/10 border border-white/10 text-center py-3 font-semibold">
-    Movs
-  </a>
-</div>
-            </Card>
-
-            <Card>
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-semibold">Insights (solo gastos)</p>
-                <p className="text-xs text-white/60">Total: {euro(insights.total)}</p>
-              </div>
-
-              <div className="mt-4">
-                <p className="text-xs text-white/60">Top categorías</p>
-                <div className="mt-2 space-y-3">
-                  {insights.topCategories.length === 0 ? (
-                    <p className="text-white/60 text-sm">Aún no hay gastos.</p>
-                  ) : (
-                    insights.topCategories.map((c) => (
-                      <div key={c.name} className="rounded-xl bg-black/40 border border-white/10 p-3">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-sm font-semibold truncate">{c.name}</p>
-                          <p className="text-sm">{euro(c.sum)}</p>
-                        </div>
-                        <ProgressBar value={c.sum} max={insights.total} />
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              <div className="mt-5">
-                <p className="text-xs text-white/60">Top conceptos</p>
-                <div className="mt-2 space-y-2">
-                  {insights.topConcepts.length === 0 ? (
-                    <p className="text-white/60 text-sm">Aún no hay gastos.</p>
-                  ) : (
-                    insights.topConcepts.map((c) => (
-                      <div
-                        key={c.label}
-                        className="flex items-center justify-between gap-2 rounded-xl bg-black/40 border border-white/10 px-3 py-2"
-                      >
-                        <p className="text-sm font-medium truncate">{c.label}</p>
-                        <p className="text-sm">{euro(c.sum)}</p>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              <p className="mt-3 text-xs text-white/50">
-                Solo cuenta <span className="font-semibold">EXPENSE</span>.
-              </p>
-            </Card>
+            {/* ... TODO igual que tu código hasta la Card de "Ahorros y huchas" ... */}
 
             <Card>
               <p className="text-sm font-semibold">Ahorros y huchas</p>
