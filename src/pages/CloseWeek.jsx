@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import Layout from "../components/Layout";
 import BottomNav from "../components/BottomNav";
 import { api } from "../api/client";
-import { getWeeks, closeWeek } from "../api/weeks";
+import { getCurrentWeek, closeWeek } from "../api/weeks";
 
 function Card({ children }) {
   return <div className="rounded-2xl border border-white/10 bg-white/5 p-4">{children}</div>;
