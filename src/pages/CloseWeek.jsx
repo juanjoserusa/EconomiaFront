@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import Layout from "../components/Layout";
 import BottomNav from "../components/BottomNav";
 import { api } from "../api/client";
-import { getCurrentWeek, closeWeek } from "../api/weeks";
+import { getWeeks, closeWeek } from "../api/weeks";
 
 function Card({ children }) {
   return <div className="rounded-2xl border border-white/10 bg-white/5 p-4">{children}</div>;
@@ -73,19 +73,16 @@ export default function CloseWeek() {
   );
 
   const sortedWeeks = useMemo(() => {
-    // ✅ orden estable: por week_index asc
     const list = [...(weeks || [])];
     list.sort((a, b) => (a.week_index || 0) - (b.week_index || 0));
     return list;
   }, [weeks]);
 
   const closableWeeks = useMemo(() => {
-    // ✅ solo OPEN y terminadas
     return sortedWeeks.filter((w) => w.status === "OPEN" && isEnded(w));
   }, [sortedWeeks]);
 
   const openCurrentWeeks = useMemo(() => {
-    // OPEN pero vigente (no cerrable)
     return sortedWeeks.filter((w) => w.status === "OPEN" && !isEnded(w));
   }, [sortedWeeks]);
 
@@ -101,13 +98,13 @@ export default function CloseWeek() {
     try {
       const [w, s] = await Promise.all([getWeeks(), getSummaryCurrent()]);
       const list = Array.isArray(w) ? w : [];
+
       setWeeks(list);
       setSummary(s || null);
 
-      // ✅ default: última semana CERRABLE (OPEN + terminada).
-      // si no hay, cae a la OPEN vigente; si no, la última.
       const sorted = [...list].sort((a, b) => (a.week_index || 0) - (b.week_index || 0));
       const closables = sorted.filter((x) => x.status === "OPEN" && isEnded(x));
+
       const defaultWeek =
         (closables.length ? closables[closables.length - 1] : null) ||
         sorted.find((x) => x.status === "OPEN") ||
@@ -141,11 +138,10 @@ export default function CloseWeek() {
     );
   }, [piggyTwoAmount, piggyNormalAmount, returnToBankAmount]);
 
-  // ✅ SOLO permite cerrar una semana OPEN y terminada (no la vigente)
   const canClose = useMemo(() => {
     if (!selectedWeek) return false;
     if (selectedWeek.status !== "OPEN") return false;
-    if (!isEnded(selectedWeek)) return false;
+    if (!isEnded(selectedWeek)) return false; // ⛔ vigente no se puede
     if (totalToMoveEur <= 0) return false;
     return true;
   }, [selectedWeek, totalToMoveEur]);

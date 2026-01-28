@@ -4,6 +4,10 @@ export function getCurrentWeek() {
   return api("/week/current");
 }
 
+export function getWeeks() {
+  return api("/weeks");
+}
+
 export function closeWeek(weekId, payload) {
   return api(`/weeks/${weekId}/close`, {
     method: "POST",
